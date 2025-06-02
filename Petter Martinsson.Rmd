@@ -1,0 +1,2110 @@
+---
+output: 
+  pdf_document:
+    citation_package: biblatex
+    dev: cairo_pdf
+    keep_tex: true
+    number_sections: true
+    fig_caption: true
+    latex_engine: xelatex
+
+bibliography: thesisbib.bib
+biblio-style: apa
+geometry: a4paper, margin=1in
+linestretch: 1.5
+mainfont: Times New Roman
+fontsize: 12pt
+linkcolor: blue
+
+header-includes: |
+  \usepackage{longtable}
+  \usepackage[style=apa, backend=biber]{biblatex}
+  \DeclareLanguageMapping{english}{english-apa}
+  \addbibresource{thesisbib.bib}
+  \LTcapwidth=.95\textwidth
+  \linespread{1.05}
+  \usepackage{hyperref}
+  \usepackage{setspace}
+  \usepackage{float}
+  \floatplacement{figure}{H}
+  \usepackage{pdfpages} 
+  \usepackage{titlesec}
+  \titleformat{\section}
+    {\normalfont\bfseries\fontsize{15pt}{16pt}\selectfont}
+    {\thesection}{1em}{}
+  \titleformat{\subsection}
+    {\normalfont\itshape\fontsize{12pt}{14pt}\selectfont}
+    {\thesubsection}{1em}{}
+  \hypersetup{
+      colorlinks=true,
+      linkcolor=blue,
+      urlcolor=blue,
+      citecolor=blue
+    }
+---
+```{r setup, include=FALSE}
+options(knitr.kable.NA = '')
+knitr::opts_chunk$set(echo = FALSE,
+                      message=FALSE, warning=FALSE,
+                      fig.path='figs/',
+                      cache.path = '_cache/',
+                      fig.width = 8.5, 
+                      fig.process = function(x) {
+                      x2 = sub('-\\d+([.][a-z]+)$', '\\1', x)
+                      if (file.rename(x, x2)) x2 else x
+                      })
+
+library(tidyverse)
+library(stevethemes)
+library(lmtest)
+library(stevemisc)
+library(modelsummary)
+library(performance)
+library(ordinal)
+library(nnet)
+library(sandwich)
+library(formattable)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(psych)
+library(tinytable)
+library(gt)
+library(lme4)
+library(lattice)
+library(ggplot2)
+library(forcats)
+library(reshape)
+library(vtable)
+library(gridExtra)
+library(plm)
+library(arm)
+library(merTools)
+library(patchwork)
+library(ggstance)
+library(ggforce)
+
+```
+```{r, dataload, echo=FALSE}
+
+# This block loads and cleans the data
+
+data2023raw <- readxl::read_excel("2023_SiE.xlsx", col_types = "text")
+
+data2022raw <- readxl::read_excel("2022_SiE.xlsx", col_types = "text")
+
+# Remove respondents who failed attention checks (only available for 2023)
+
+data2023 <- filter(data2023raw, AttentionCheck1_23_1 == "Strongly disagree" 
+                   & AttentionCheck2_23 == "Blue") 
+
+# Only include relevant questions
+
+data2023 <- subset(data2023, select = 
+                     c(TRENDFILEID, countryname, education, Q2, Q4,
+                       Q9, Q9_UK, Q47a_8, New_Q41, 
+                       New_Q43, Q69, Q60, Q61, Q62, profile_work_stat, 
+                       Glob_areatype, age_grp_all, gender_all, income, Q68_a)) 
+
+data2022 <- subset(data2022raw, select = 
+                     c(trendfileid, country, education_uk_all_103, q2, q4,
+                       q9, q9_uk, q47a_8, new_q41, 
+                       new_q43, q69, q60, q61, q62, profile_work_stat, 
+                       glob_areatype, age_grp_all, gender_all, q68_r))
+
+# Recodes country names in 2022 dataset
+
+data2022 %>%
+  mutate(country = case_when(
+    country == "1" ~ "UK",
+    country == "197" ~ "Slovakia",
+    country == "153" ~ "Netherlands",
+    country == "60" ~ "Denmark",
+    country == "99" ~ "Hungary",
+    country == "56" ~ "Croatia",
+    country == "35" ~ "Bulgaria",
+    country == "125" ~ "Lithuania",
+    country == "180" ~ "Romania",
+    country == "85" ~ "Greece",
+    country == "175" ~ "Poland",
+    country == "204" ~ "Spain",
+    country == "82" ~ "Germany",
+    country == "210" ~ "Sweden",
+    country == "108" ~ "Italy",
+    country == "75" ~ "France",
+    country == "74" ~ "Finland"
+  )) -> data2022
+
+# Recodes missing values from different questions for UK and EU.
+
+data2023 %>%
+  mutate(Q9 = ifelse(countryname == "UK", "UK", Q9),
+         Q9_UK = ifelse(countryname != "UK", "NOTUK", Q9_UK)) -> data2023
+
+data2022 %>%
+  mutate(q9 = ifelse(country == "UK", "UK", q9),
+         q9_uk = ifelse(country != "UK", "NOTUK", q9_uk)) -> data2022
+
+# Renames variables
+
+data2023 %>%
+  dplyr::rename(
+    id = TRENDFILEID,
+    country = countryname,
+    incometext = Q61,
+    identitytext = Q4,
+    democracytext = Q2,
+    supporteutext = Q9,
+    supporteuuktext = Q9_UK,
+    supportuatext = Q47a_8,
+    trustgovtext = New_Q41,
+    trusteutext = New_Q43,
+    militaryspending = Q69,
+    risks = Q60,
+    ideologytext = Q62,
+    employmentstatus = profile_work_stat,
+    residencearea = Glob_areatype,
+    agegroup = age_grp_all,
+    gender = gender_all,
+    russiathreattext = Q68_a
+  ) -> data2023
+
+data2022 %>%
+  dplyr::rename(
+    id = trendfileid,
+    ps = education_uk_all_103, # tertiary!
+    incometext = q61,
+    identitytext = q4,
+    democracytext = q2,
+    supporteutext = q9,
+    supporteuuktext = q9_uk,
+    supportuatext = q47a_8,
+    trustgovtext = new_q41,
+    trusteutext = new_q43,
+    militaryspending = q69,
+    risks = q60,
+    ideologytext = q62,
+    employmentstatus = profile_work_stat,
+    residencearea = glob_areatype,
+    agegroup = age_grp_all,
+    gender = gender_all,
+    russiathreattext = q68_r
+  ) -> data2022
+
+# Recodes various "Don't know" as NA
+
+data2023[data2023 == "Don't know"] <- NA 
+data2023[data2023 == "Prefer not to say"] <- NA
+data2023[data2023 == "Prefer not to answer"] <- NA
+
+data2022[data2022 == "Don't know"] <- NA 
+data2022[data2022 == "Prefer not to say"] <- NA
+data2022[data2022 == "Prefer not to answer"] <- NA
+
+```
+```{r, dependentvariable, echo = F}
+
+# This block recodes DV to binary
+
+data2023 %>%
+  mutate(supportua = case_when(
+    supportuatext == "I would be willing" ~ 1,
+    supportuatext == "I would not be willing" ~ 0,
+  ))-> data2023
+
+data2022 %>%
+  mutate(supportua = case_when(
+    supportuatext == "1" ~ 1,
+    supportuatext == "2" ~ 0,
+    supportuatext == "3" ~ NA
+  ))-> data2022
+
+```
+```{r, independentvariables, echo = FALSE}
+
+# This block recodes the IVs
+
+data2023 %>% 
+  mutate(democracy = 
+           ifelse(
+             democracytext == "10 - Extremely satisfied", 10, 
+                  ifelse(
+                    democracytext == "0 - Extremely dissatisfied", 0, 
+                    strtoi(democracytext))),
+       supporteu = ifelse(
+         country != "UK",
+         ifelse(supporteutext == 
+                  "I would vote to remain a member of the European Union", 
+                1, 0),
+         ifelse(supporteuuktext=="Unhappy", 1, 0)),
+       trustgov = 
+         ifelse(trustgovtext == "Trust a lot" | 
+                  trustgovtext == "Trust a fair amount", 1, 0),
+       trusteu = ifelse(trusteutext == "Trust a lot" | 
+                          trusteutext == "Trust a fair amount", 1, 0),
+       militarist = ifelse(militaryspending == "Too little", 1, 0),
+       russiathreat = ifelse(russiathreattext == "Russian power and influence", 1, 0),
+       euidentity = case_when(
+         identitytext == "European only" ~ 3,
+         identitytext == "European and $Qnationality" ~ 2,
+         identitytext == "$Qnationality and European" ~ 1,
+         identitytext == "$Qnationality only" ~ 0,
+         identitytext == "None of these" ~ 0)
+       ) -> data2023
+
+data2022 %>% 
+  mutate(
+    democracy = ifelse(democracytext == "11", NA, strtoi(democracytext)),
+    supporteu = ifelse(country != "UK",
+      case_when(supporteutext == "1" ~ 1,
+                supporteutext == "2" | supporteutext == "3" ~ 0,
+                supporteutext == "4" | supporteutext == "999" ~ NA),
+      case_when(supporteuuktext == "2" ~ 1,
+                supporteuuktext == "1" | supporteuuktext == "3" ~ 0,
+                supporteuuktext == "4" | supporteuuktext == "999" ~ NA)),
+    trustgov = case_when(
+      trustgovtext == "1" | trustgovtext == "2" ~ 1,
+      trustgovtext == "3" | trustgovtext == "4" ~ 0,
+      trustgovtext == "5" ~ NA),
+    trusteu = case_when(
+      trusteutext == "1" | trusteutext == "2" ~ 1,
+      trusteutext == "3" | trusteutext == "4" ~ 0,
+      trusteutext == "5" ~ NA),
+    militarist = case_when(
+      militaryspending == "1" ~ 1,
+      militaryspending == "2" | militaryspending == "3" ~ 0,
+      militaryspending == "4" ~ NA),
+    russiathreat = case_when(
+      russiathreattext == "2" ~ 1,
+      russiathreattext == "1" | russiathreattext == "3" | 
+      russiathreattext == "4" | russiathreattext == "5" |
+      russiathreattext == "6" ~ 0,
+      russiathreattext == "7" ~ NA),
+    euidentity = case_when(
+      identitytext == "4" ~ 3,
+      identitytext == "3" ~ 2,
+      identitytext == "2" ~ 1,
+      identitytext == "1" ~ 0,
+      identitytext == "5" ~ 0,
+      identitytext == "6" ~ NA)
+       ) -> data2022
+
+```
+```{r, controlvariables, echo = F}
+
+# This block recodes the control variables
+
+data2023 %>% 
+  mutate(ideology = case_when(
+           ideologytext == "Very left-wing" ~ 0,
+           ideologytext == "Fairly left-wing" ~ 1,
+           ideologytext == "Slightly left-of-centre" ~ 2,
+           ideologytext == "Centre" ~ 3,
+           ideologytext == "Slightly right-of-centre" ~ 4,
+           ideologytext == "Fairly right-wing" ~ 5,
+           ideologytext == "Very right-wing" ~ 6
+         ),
+       risktaker = ifelse(risks == "I prefer to take risks", 1, 0), 
+       ps = ifelse(
+         education == "Doctoral or equivalent level degree" | 
+           education == "Masters or equivalent level degree" | 
+           education == "Bachelors or equivalent level degree" | 
+           education == "Short-cycle tertiary education" | 
+           education == "Post-secondary, non-tertiary education", 1, 0),
+       unemployed = ifelse(employmentstatus == "Unemployed" | 
+                             employmentstatus == "Not working", 1, 0),
+       urban = ifelse(residencearea == "Centre of a city/large town" | 
+                        residencearea == "Suburb or part of a city/large town, 
+                      which is outside its centre", 1, 0),
+       age = case_when(
+         agegroup == "18 - 24" ~ 0,
+         agegroup == "25 - 34" ~ 1,
+         agegroup == "35 - 44" ~ 2,
+         agegroup == "45 - 54" ~ 3,
+         agegroup == "55+" ~ 4
+       ),
+       female = ifelse(gender == "Female", 1, 0),
+       extreme = ifelse(ideologytext == "Very left-wing" | 
+                          ideologytext == "Very right-wing", 1, 0),
+       income = case_when(
+         incometext == "I am much worse off than most other people my age" ~ 0,
+         incometext == "I am a little worse off than most other people my age" ~ 1,
+         incometext == "I am no better or worse off than most other people my age" ~ 2,
+         incometext == "I am a little better off than most other people my age" ~ 3,
+         incometext == "I am much better off than most other people my age" ~ 4)
+       ) -> data2023
+
+data2022 %>% 
+  mutate(ideology = case_when(
+    ideologytext == "1" ~ 0,
+    ideologytext == "2" ~ 1,
+    ideologytext == "3" ~ 2,
+    ideologytext == "4" ~ 3,
+    ideologytext == "5" ~ 4,
+    ideologytext == "6" ~ 5,
+    ideologytext == "7" ~ 6,
+    ideologytext == "8" | ideologytext == "100" ~ NA),
+    risktaker = ifelse(risks == "1", 1, 0),
+    ps = ifelse(ps == "1", 1, 0),
+    unemployed = ifelse(
+      employmentstatus == "6" | employmentstatus == "7",1, 0),
+    urban = ifelse(residencearea == "1" | residencearea == "2", 1, 0),
+    age = case_when(
+      agegroup == "1" ~ 0,
+      agegroup == "2" ~ 1,
+      agegroup == "3" ~ 2,
+      agegroup == "4" ~ 3,
+      agegroup == "5" ~ 4),
+    female = ifelse(gender == "2", 1, 0),
+    income = case_when(
+      incometext == "5" ~ 0,
+      incometext == "4" ~ 1,
+      incometext == "3" ~ 2,
+      incometext == "2" ~ 3,
+      incometext == "1" ~ 4,
+      incometext == "6" ~ NA)
+    ) -> data2022
+
+```
+```{r, finaldataset, echo = F}
+
+# This block creates new dataframes consisting of relevant variables
+
+finalvariables23 <- 
+  c("id", "supportua", "country", "euidentity", "trusteu", "supporteu", 
+    "militarist", "ps", "unemployed", "urban", "age", "female", 
+    "income", "ideology", "risktaker", "russiathreat")
+
+finalvariables22 <- 
+  c("id", "supportua", "country", "euidentity", "trusteu", "supporteu", 
+    "militarist", "ps", "unemployed", "urban", "age", "female",
+    "income", "ideology", "risktaker", "russiathreat")
+
+finaldata2023 <- data2023[finalvariables23]
+finaldata2022 <- data2022[finalvariables22]
+```
+
+\includepdf[pages=1]{Cover page.pdf} 
+\newpage
+
+\section*{Abstract}
+
+The Ukrainian war effort has long been subject to strong and broad support among the European public, with a substantial share of the European population even supporting direct military intervention. However, the underlying mechanisms behind this support are still poorly understood. Given the growing evidence supporting the claim that public opinion shapes foreign policy, exploring the issue of European public support for the Ukrainian cause is becoming increasingly relevant. An analysis of the 2022 and 2023 waves of the EUI-YouGov *Solidarity in Europe* survey indicates that individual European support for sending armed forces to help defend Ukraine is not only influenced by immediate security concerns, but also by the level of trust in and support for the EU, as well as European self-identification. Drawing on image theory, this thesis argues that a common European identity shapes the views of individual Europeans on Ukraine and Russia, and by extension serves as a major driver of European public support for military intervention. By expanding the definition of Europe to include Ukraine, Russia's military aggression is viewed by many Europeans not only as a direct threat to physical security, but also as a threat to a shared European social identity. This threat is seen as strong and immediate enough to warrant a military response, even at the risk of a major regional war.
+
+**Keywords:** European public opinion, Russia-Ukraine war, military intervention, European identity, social identity, image theory, foreign policy attitudes
+
+\newpage
+
+\hypersetup{linkcolor=black}
+\tableofcontents
+\newpage
+\listoffigures
+\listoftables
+\hypersetup{linkcolor=blue}
+\newpage
+
+# Introduction
+Russia’s full-scale invasion of Ukraine in 2022 constitutes one of the most consequential events in modern European history. So far, most European governments have offered strong support for the Ukrainian cause, contributing substantial amounts of financial, humanitarian and material aid. This willingness to assist Ukraine in its defense against Russian expansionism has also been reflected in public opinion, with European citizens expressing high levels of unity regarding support for Ukraine [@stolle2024a].
+
+To what extent the foreign policies pursued by democratic governments are affected by public opinion is subject to academic debate. But a growing body of research suggests that individual citizens hold relatively well-informed views on the world around them, and allow these views to influence their political behavior, which in turn shapes the foreign policies of their governments (e.g. @kertzer2017 and @tomz2013).
+
+The level and scope of European military aid to Ukraine has steadily increased during the course of the war. Several materiel types which were previously considered off-limits have now been delivered. Given recent developments regarding peace negotiations, a direct intervention by the armed forces of one or several European countries is no longer as impossible a development as it once seemed. Thus, understanding the underlying mechanisms behind European public support for military intervention in Ukraine is becoming increasingly relevant.
+
+However, at least two areas can be identified where our understanding of European public support for Ukraine is still lacking. First, given the currency of the issue, most academic work has as of yet been concerned with older data (i.e., primarily from 2022), excluding more recent developments. Second, while studies exist on the willingness of European citizens to help other EU countries in general [e.g. @clasen2024], research focusing on empirical assessments of primary motivations behind individual support for the use of military force to defend Ukraine seems to be absent – including if and how these motivations have shifted over time. 
+
+This thesis will contribute to existing research by addressing both these gaps. Furthermore, the empirical results will serve as an addition to the existing literature on bottom-up approaches to foreign policy attitudes. Insights provided regarding European public opinion can also serve as a basis for future policy considerations, as governments across Europe grapple with how to handle this long-lasting and costly war.
+
+Given the urgency of the issue, as well as the stakes involved, the Ukrainian war constitutes a highly relevant case for exploring factors that shape public support for military intervention conducted to defend a non-allied country. Further understanding of the underlying mechanisms influencing individual attitudes regarding the use of military force in the defense of other countries also serves as an important aspect of the broader issue of the dynamics of public opinion and foreign policy.
+
+This thesis will be structured as follows: first, the aim, purpose and research questions of the thesis will be introduced. Following this, previous research regarding the links between public opinion and foreign policy, public opinion on military intervention, and European public opinion on security issues and support for Ukraine will be presented. Next, a theoretical framework based on social identity theory and image theory is introduced, together with three central hypotheses. The sections that follow discuss the data, the variables included in the analysis, and model specification. Following this, the results are presented and analysed, and evaluated through a number of robustness checks. The final section concludes.
+
+# Aim, purpose and research questions
+The aim of this thesis will be to further our understanding of European public support for direct military intervention in Ukraine. Specifically, it will attempt to identify which factors best explain whether a European citizen supports sending armed forces to help defend Ukraine or not, and if these factors have changed over time. By including a temporal dimension in the analysis, trends in public opinion can be identified. These trends are becoming increasingly important to understand as the length of the war increases.
+
+In order to achieve the aim above, the thesis will attempt to answer two research questions:
+
+**RQ1:** Which are the main factors that can explain whether a European citizen supports sending armed forces to help defend Ukraine?
+
+**RQ2:** Have these factors changed between 2022 and 2023?
+
+# Previous research
+This thesis can be partly placed in the same tradition as previous empirical work focusing on the links between public opinion and foreign policy considerations among the general public. These studies normally make use of either broad surveys targeting the public at large or more focused survey experiments, or in some cases both. Two mechanisms through which public opinion is theorized to influence the decisions made by foreign policy elites typically emerge: responsiveness and selection.
+
+Based on the results from a survey experiment targeting British members of Parliament, @chu2022 argue that leaders in democratic countries take the opinions of the general public into account when making decisions on foreign policy. They make the case that leaders in democratic nations are responsive to domestic audiences, with public opinion acting as a constraint on foreign policy elites. @oktay2018 adopts a broader approach, drawing on a transnational survey encompassing 13 countries to point to the existence of so-called "foreign policy performance voting" in Europe. These findings indicate a more direct role for the public, where they actively select leaders based on an evaluation of the foreign policy record of the incumbent. Combining the narrow focus of @chu2022 and the broad approach of @oktay2018, @tomz2020 put both responsiveness and selection to the test, arguing that the results of their study confirm that public opinion shapes foreign policy through both pathways.
+
+While sharing many methodological similarities, this thesis departs from the studies presented above through primarily focusing on the *why*, as opposed to the *how*. That is, by adopting a theoretical approach where a link between public opinion and foreign policy is taken as given, the empirical focus is on explaining why individuals form certain opinions on foreign policy (as opposed to whether these opinions have any effect on the foreign policies pursued by democratic governments). Given the explicit focus on military intervention, this thesis is inspired by previous work exploring individual motivations on this issue.
+
+As @rathbun2016 show, foreign-policy orientations held by the general public can be traced to personal values. Based on the results of a national survey of American adults, @rathbun2016 argue that the same values that shape the choices we make in our daily lives also can be extended to foreign policy. Foreign policy orientations associated with hawkishness, or stronger preferences for military intervention (so-called "militant internationalism") is, as argued by @rathbun2016, in turn linked to conservation values, one of four superordinate values commonly invoked in political psychology theory. Using a similar point of departure, @kim2014 explores the role of affect (i.e., feelings toward a country) in the formation of public opinion regarding military intervention. Drawing on a survey of US citizens regarding attitudes to troop deployments, @kim2014 makes the case that affect plays a significant role in determining the level of public support for intervention in different scenarios. In addition, preferred foreign policy goals/postures, similar to the orientations invoked by @rathbun2016, are found to have a substantial impact.
+
+Considerations related to personal values and belief systems appear to partly be tied to the foreign policy already pursued by the government in question. More specifically, alliances seem to matter. In a survey experiment targeting the American public, @tomz2021 test the effects of alliances on public support for war. They find that Americans are far more likely to support defending an ally and that the effects from alliances on public opinion are most significant when war is seen as a costly option. In addition, the results presented by @tomz2021 speak to the motivations behind these effects. They argue that concerns related to reputation for military reliability play a major role, as well as moral obligation. This sense of obligation is, in turn, found to be linked to two specific moral foundations: fairness and loyalty, echoing the findings on personal values presented by @rathbun2016.
+
+Ample empirical evidence seems to support the claim that individual beliefs and values matter for public opinion not only regarding domestic politics, but also in the case of foreign policy. These characteristics, and the pathways linking them to public opinion, are of course quite complex. But clearly, as the results above indicate, personal values [@rathbun2016], feelings [@kim2014] and perceived moral obligations [@tomz2021] all seem to play an important role in shaping public opinion on military interventions -- and by extension the policies pursued by democratic governments. 
+
+With its explicit focus on empirical evaluation of individual motivations for supporting military intervention, this thesis can be placed in the same tradition as the studies presented above. However, it also displays three key differences. First, most previous research on military intervention has been based on survey results from the US. While studies in this fashion on the populations of other countries exist, these constitute an exception. Thus, this thesis contributes to widening the perspective on the subject of military interventions by including non-American data. Second, by analyzing surveys from two separate years, temporal trends can be taken into account to a greater extent than in the studies above. And third, by approaching the issue from a distinctly European perspective, the results will mirror wider pan-European sentiments, and not just reflect the attitudes of citizens in one specific country.
+
+In addition to the literature on public support for military intervention, this thesis can also be seen through a regional lens, and thus related to empirical work on European attitudes to security in general, and the Ukrainian war effort in particular. Here, this thesis departs from existing research through its explicit focus on identifying factors explaining individual support for sending armed forces to help defend Ukraine.
+
+Given the currency of the issue, few studies exist on European public support for Ukraine. In one such study, @stolle2024a shows how surveys conducted during two different periods in 2022 reflect high and broad support for Ukraine among European citizens. However, substantial variation is identified between countries and issues. Regarding intra-country patterns, supporters of right-wing extremism and opposition parties are found to be less likely to express support for Ukraine than the national average. @stolle2024a does not, however, run any deeper analysis, instead relying on descriptive statistics. Still, the results offer valuable insights regarding directions for future studies.
+
+From a wider perspective, @fernandez2023 present an important finding regarding European public opinion and the Russo-Ukrainian war: that the war has heightened -- as opposed to altered -- underlying trends regarding security and defense. Based on the results of a big data-based sentiment analysis of media coverage, they identify a general trend where the high levels of pre-war support for the EU's Common Security and Defense Policy increased further in 19 of 27 member states after Russia's full-scale invasion of Ukraine. @wang2023 also provide interesting insights into individual motivations, looking at public opinion in seven European countries on three central issues of European security: EU military capacity building, EU foreign policy-making, and EU military independence from the US. They show that higher levels of perceived threat from both the current war and geopolitical competitors such as Russia and China, as well as European identity and left-wing ideological sympathies all contribute to higher support for the EU playing a bigger role in European security.
+
+# Theory and hypotheses
+This section introduces a theoretical framework through which foreign policy attitudes can be understood, based on a bottom-up approach drawing on the concepts of identity and images. Following this, hypotheses relating to the two research questions are developed.
+
+## Theoretical framework
+When it comes to explaining observed structures in public opinion on foreign policy, @kertzer2023 notes that two types of models are typically invoked –- top-down and bottom-up. Top-down models usually focus on so-called elite cues, based on the argument that the general public is relatively uninformed regarding foreign policy considerations, and that they instead often choose to listen to recommendations provided by elites that they trust. These models have been shown to hold some explanatory power regarding for instance the major reversals on certain issues according to partisan lines in the US [@kertzer2023, pp. 449--450]. But several limitations have also been identified, including the failure to explain differences between public and elite opinion –- an issue that has become increasingly relevant in Western democracies. Given these limitations, as well as the explicit focus on individual factors in this thesis, the use of a top-down model would likely prove to be challenging.
+
+Bottom-up approaches to foreign policy considerations, in contrast to the top-down focus on elites, instead draw on psychological research to explain the clustering of foreign policy attitudes among the general public. Without denying the importance of elites in influencing public opinion, bottom-up models emphasize the role of individual factors such as ideology and values, implying that individual thinking on foreign policy is shaped by the intrinsic political properties of the issue at hand [@kertzer2023, pp. 451--453]. 
+
+Identity is both a popular and contested concept in international relations research. One way of approaching the issue is through the lens of social identity theory (SIT). SIT can be seen as a broad social psychological theory, primarily concerning the role of self and identity regarding group and intergroup phenomena [@hogg2016]. A core assumption of SIT is that social groups -- from small teams to larger demographic categories -- offer a shared identity to their members, based on how the ingroup separates itself from relevant outgroups. These social identities then form the basis for individual considerations regarding views of the self, beliefs, and behaviors [@hogg2016, p. 6].
+
+The idea of self and other is a recurring theme in discussions on collective identities (see for instance @neumann1996). The delineation between what the collective is (self) and what it isn't (other), emerges as a key aspect of identity construction. Perhaps the most common manifestation of the self/other dichotomy within international relations is the formation of national identities. As @herrmann2017 argues, higher levels of attachment to a national social identity intensifies emotions on certain foreign policy issues, both positive and negative. These emotions, in turn, shape how events on the world stage are interpreted through a process @herrmann2017 refers to as motivated reasoning, where individual beliefs interact with incoming information. Through this process, people "rewrite reality around their favored course of action, marrying the logic of appropriateness to their own preferences" [@herrmann2017, p. 61].
+
+Given that identities are multifaceted and sometimes overlapping, a national identity can be seen as merely one of several identities relevant to an individual at any given time. In a European context, one could easily see the relevance of a distinctly *European* identity, representing a shared social identity related to the norms, values and ideas associated with Europe. Based on the SIT assumption that social identities prescribe beliefs and actions to members of the ingroup, a possible link emerges between identity and public opinion. Using social identities as a point of departure, we turn to image theory to explain how identity shapes foreign policy considerations.
+
+Image theory is a bottom-up perspective based on the idea that individuals form images of other countries, which in turn serve as the basis for judgements made regarding actions on the world stage. Drawing on previous research in political psychology, @herrmann2013 makes the case that images can become assumptions producing routinized habits, which heavily influence ideas regarding central issues of foreign policy. Images serve as "cognitive shortcuts", affecting how incoming information is perceived and evaluated [@herrmann2013, pp. 337--338]. 
+
+@herrmann1995 propose a categorization of images based on three dimensions, reflecting an evaluation of three strategic concerns regarding the foreign actor in question: perceived opportunity (or threat), relative power, and cultural status. Two images can be considered to be especially relevant for this case: the ally and barbarian images. The ally image is associated with actors that are perceived to hold equal power and cultural status, while at the same time presenting opportunities for cooperation. A barbarian image, on the other hand, represents a more powerful actor of lower cultural status that is seen as posing a threat (for a discussion on the barbarian image, see @alexander2005). Drawing on this, a key theoretical assumption for this thesis emerges: that individuals who express attachment to the beliefs and values associated with European identity also, to a high extent, tend to view Ukraine as an ally, and Russia as a barbarian.
+
+The othering of Russia, and its connection to the development of European identity, is a complex and nuanced issue, intrinsically linked to historical heritage [@neumann1998]. One could argue that the core values of modern European identity (e.g. democracy, diversity and respect for the rule of law) are, in many ways, antithetical to the Putinist Russian state, forming the basis for many Europeans' image formation vis-à-vis Russia. In addition, when applying the barbarian image as a lens, Russia's aggression towards its neighbors as well as its bellicose rhetoric can, for many Europeans, be perceived as threatening.
+
+Extension of the European identity to also, at least partly, include Ukraine is a relatively new phenomenon. But in the three decades following the fall of the Soviet Union, one could argue that a substantial shift has taken place regarding the role of Ukraine in European identity formation -- from an Eastern, post-Soviet Other, closely tied to Russia, to a more Western, and perhaps even European, Self. One key element in this shift was the Maidan revolution in 2014, closely associated with a pro-European movement. In addition, the Russian occupation of Crimea and parts of the Donbass arguably led to the loss of some of Ukraine's more Eastern elements, further accelerating the shift. And following the full-scale invasion in 2022, Ukrainian identity is increasingly seen as European, as argued by @deyermond2022. 
+
+If individual foreign policy considerations are influenced by the images individuals hold of other nations, specific images could be connected to specific policy responses. In this case, the ally image extended to Ukraine, and the barbarian image associated with Russia, are theorized to provoke a strong motivation to defend Ukraine from the Russian invasion, also at great cost. One could argue that this response is driven by at least two factors: one, that the war is viewed as an attack by the Other (Russia) on the Self (Ukraine/Europe), invoking similar reactions as when the own nation is threatened. And two, that the surprisingly strong Ukrainian defense, including successful offensive operations, has shown that the Ukrainian war effort is far from a lost cause, and that European support can actually make a real difference in the conflict.
+
+To summarize, the theoretical framework presented above draws on social identity as a way of explaining image formation, which in turn is theorized to affect foreign policy considerations by serving as a heuristic for individual decision-making. In this case, individuals who are highly attached to a modern European identity are assumed to hold an ally image of Ukraine and a barbarian image of Russia. Thus, the ongoing war is viewed as an attack by a hostile power on an allied one, provoking sympathies for a strong -- and costly -- response. These sympathies are strengthened by the dynamics of the conflict, where European intervention could possibly contribute decisively to a positive outcome.
+
+## Hypotheses
+Having established a theory of possible connections between European identity and the research questions at hand, the main theoretical assumption of this thesis can be described as follows:
+
+Individual considerations for a non-negligible share of the European population regarding support for sending armed forces to help defend Ukraine are influenced by the presence of a shared European identity, which advances the perception of Ukraine as an ally that should be protected from Russia, which is viewed as a barbarian power.
+
+Building on this, a first hypothesis can be formulated:
+
+**H1:** Individual Europeans who express beliefs associated with a European identity are more likely to support sending armed forces to help defend Ukraine.
+
+One of the theorized pathways linking European identity to support for military intervention in Ukraine is through its influence on how Russia is perceived. However, one could easily argue that other, more tangible concerns regarding for instance physical security are at play here. To control for the presence of other factors influencing the perception of Russia as a threat, a second hypothesis is introduced. This hypothesis partly captures the theorized effects of identity on threat perception, and partly other motivating factors (here assumed to primarily consist of concerns for physical security):
+
+**H2:** Individual Europeans who see Russia as an immediate security threat are more likely to support sending armed forces to help defend Ukraine.
+
+While not taking an explicit stance on the temporal dimension, the discussion in the previous section assumes that the theoretical framework is relatively stable over time. Thus, the influence of a European identity is not assumed to dramatically change in importance as the length of the war increases, leading to the formulation of a third hypothesis related to the second research question:
+
+**H3:** The link between European identity and individual European support for sending armed forces to help defend Ukraine is stable over time.
+
+# Data
+The EUI-YouGov dataset on European solidarity consists of yearly surveys conducted between 2018 and 2023, encompassing roughly 23 000 respondents each year from a total of 17 European countries [@hemerijck2023]. Only the results from the last two surveys –- 2022 and 2023 –- will be used, as they contain questions regarding individual support for military intervention in Ukraine. New respondents are used for each yearly wave. The surveys cover a number of issues, including preferences for European solidarity as well as individual attributes.
+
+Responses from 23 134 and 24 261 individuals are included in the 2022 and 2023 datasets, respectively. The 2023 questionnaire included two attention checks, and individuals who failed at least one of these are excluded from this analysis, leaving a total of 17 628 respondents. No attention checks were included in the 2022 survey. Only complete cases (i.e. observations without any missing values) are included in the final model, reducing the total number of respondents to 11 211 for 2022 and 8 630 for 2023. For a discussion on missing values, including alternative approaches to addressing them, please see the [robustness checks section](#robustnesschecks).
+
+Documentation of all data manipulation is included in the [appendix](#datamanipulation).
+
+# Variables
+In this section, the variables included in the final model are described. For a full list of all variables included, and their respective titles in the codebooks for the datasets, please see the [appendix](#variablelist).
+
+## Dependent variable
+The dependent variable of interest will be if a respondent supports sending armed forces to help defend Ukraine. This is operationalized by the response to the question "Please say whether you would or would not be willing to see [respondent’s country] send armed forces to help defend Ukraine." Three responses were available to choose from: "I would be willing", "I would not be willing" and "I don't know". When all responses (except for failed attention checks in the 2023 sample) are included, results are relatively stable over time, with 42% supporting sending armed forces to help defend Ukraine in 2022, and 43% in 2023.
+
+```{r, supportmean, echo = F}
+
+# This block calculates the means for the supportua variable for the entire sample and per country, and presents this in the data frame countrysupport 
+
+countrysupport22 <- aggregate(replace(finaldata2022, is.na(finaldata2022), 0)$supportua, list(finaldata2022$country), mean)
+
+countrysupport22 %>%
+  dplyr::rename(country = Group.1,
+         "2022" = x) -> countrysupport22
+
+countrysupport23 <- aggregate(replace(finaldata2023, is.na(finaldata2023), 0)$supportua, list(finaldata2023$country), mean)
+
+countrysupport23 %>%
+  dplyr::rename(country = Group.1,
+         "2023" = x) -> countrysupport23
+
+countrysupport <- merge(countrysupport22, countrysupport23)
+countrysupport <- melt(countrysupport, id.vars = "country")
+
+avgsupport <- data.frame(c("Sample mean", "Sample mean"), c("2022", "2023"), c(mean(replace(finaldata2022, is.na(finaldata2022), 0)$supportua), mean(replace(finaldata2023, is.na(finaldata2023), 0)$supportua)))
+names(avgsupport) <- c("country", "variable", "value")
+countrysupport <- rbind(countrysupport, avgsupport)
+```
+```{r, supportdumbbell, fig.cap = "Support for sending armed forces by country (%), 2022 and 2023"}
+
+# This block displays the means of supportua in a dumbbell plot
+
+countrysupport %>% 
+  ggplot(aes(x=value,y=reorder(country, value))) +
+  geom_line(aes(group=country), color="black", linewidth=0.2) +
+  geom_point(aes(color=variable), size=3) +
+  labs(y= "Country", x = "Support (%)") +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12, family = "serif", color="black")
+        ) +
+  scale_color_manual(values=c("gray", "black"))+
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1))
+```
+
+As can be seen in the graph above there is substantial variation in the dependent variable between the countries included in the sample, with a difference of 49 percentage points between the highest (Lithuania) and lowest (Hungary) levels of support in 2023. Temporal trends are relatively stable at the country level, with slight increases observed in the UK, Sweden, Finland and Denmark, and decreases in Poland and Romania.
+
+20% of responses in the 2022 sample and 19% of responses in the 2023 sample were "I don't know". However, when only taking complete cases (i.e., respondents who have answered all other questions relevant to the variables included in the final model) into account, the rates of "I don't know" drop substantially to 11% for both datasets. Given these low rates, these responses are excluded in the final model. Responses are recoded to a binary variable, where 1 indicates a positive response, 0 a negative one, and NA represents "I don't know". An alternative model specification where "I don't know" responses are included is presented in the [robustness checks section](#fencesitters).
+
+## Independent variables
+Evaluation of the first hypothesis requires a measurement of European identity. This is, of course, not straightforward. Identity is a complex concept, which arguably takes many different forms among different individuals. An obvious way of approaching this issue is to simply ask respondents if they identify as European. One such question is included in the survey, where respondents were asked if they see themselves as only their own nationality, their nationality and European, European and their nationality, only European, or none of the above. These responses are recoded to an ordinal variable, representing a scale from 0 (nationality only or none of the above) to 3 (European only) and thus to some extent reflecting self-described levels of European identity.
+
+This variable might not fully capture the varying levels of European identity among the respondents. To broaden this measurement, two additional variables are included, reflecting trust in and support for the European Union. One could argue that European identity is closely linked to this supranational institution, which embodies many of the values -- including democracy and the rule of law -- that one could ascribe to the core tenets of modern European identity.  It is thus reasonable to assume that European identity can manifest itself as trust in and support for the EU.
+
+For the trust variable, responses to the question "How much do you trust or not trust the European Union to do what's right?" are recoded to a dummy variable equal to 1 if respondents answered "Trust a lot" or "Trust a fair amount". And the support variable is based on answers to "If there was a referendum on [your country's] membership of the European Union, how would you vote?", recoded to 1 if the response was "I would vote to remain a member of the European Union". For the UK, the question was instead phrased as "Are you happy or unhappy that the United Kingdom is no longer a member of the European Union?", with responses of "Unhappy" recoded to 1.
+
+To illustrate the variations of these factors between countries, a composite measure is presented below, reflecting the share of respondents who exhibited trust in and support for the EU, as well as self-identified as European to some extent (thus scoring at least 1 on the self-identification variable presented above), here labeled *European institutionalists*.
+
+```{r, identitymean, echo = F}
+
+# This block combines the three identity variables into one, calculates the means for this variable for the entire sample and per country, and presents this in the data frame countryidentity
+
+identity22 <- finaldata2022[, c(3, 4:6)]
+identity22 %>%
+  mutate(euidentityagg = (euidentity * trusteu * supporteu)) -> identity22
+identity22 %>%
+  mutate(strongeu = ifelse(euidentityagg > 0, 1, 0)) -> identity22
+
+countryidentity22 <- aggregate(replace(identity22, is.na(identity22), 0)$strongeu, list(identity22$country), mean)
+countryidentity22 %>%
+  dplyr::rename(country = Group.1,
+         "2022" = x) -> countryidentity22
+
+identity23 <- finaldata2023[, c(3, 4:6)]
+identity23 %>%
+  mutate(euidentityagg = (euidentity * trusteu * supporteu)) -> identity23
+identity23 %>%
+  mutate(strongeu = ifelse(euidentityagg > 0, 1, 0)) -> identity23
+
+countryidentity23 <- aggregate(replace(identity23, is.na(identity23), 0)$strongeu, list(identity23$country), mean)
+countryidentity23 %>%
+  dplyr::rename(country = Group.1,
+         "2023" = x) -> countryidentity23
+
+countryidentity <- merge(countryidentity22, countryidentity23)
+countryidentity <- melt(countryidentity, id.vars = "country")
+
+avgidentity <- data.frame(c("Sample mean", "Sample mean"), c("2022", "2023"), c(mean(replace(identity22, is.na(identity22), 0)$strongeu), mean(replace(identity23, is.na(identity23), 0)$strongeu)))
+names(avgidentity) <- c("country", "variable", "value")
+countryidentity <- rbind(countryidentity, avgidentity)
+```
+
+```{r, identitydumbbell, fig.cap = "European institutionalists by country (%), 2022 and 2023"}
+
+# This block displays the means of the combined identity variable in a dumbbell plot
+
+countryidentity %>% 
+  ggplot(aes(x=value,y=reorder(country, value))) +
+  geom_line(aes(group=country), color="black", linewidth=0.2) +
+  geom_point(aes(color=variable), size=3) +
+  labs(y= "Country", x = "European institutionalists (%)") +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12, family = "serif", color="black")
+        ) +
+  scale_color_manual(values=c("gray", "black"))+
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1))
+
+```
+
+Once again, we see some variation among nationalities with, for example, over half of Lithuanian respondents belonging to the European institutionalist category in 2023, compared to just above one tenth of Croatians. On an aggregate level, the measurement is relatively stable over time.
+
+To capture the perception of Russia as a major security threat that requires military balancing, two dummy variables are used. The first denotes the selection of "Russian power and influence" as the biggest threat to security in the respondent's country, indicating that Russia is viewed as a major security threat. To broaden this measurement, a second variable is coded as 1 if the respondent answered "Too little" to a question about the perceived level of defense spending in the respondent's country, indicating support for increasing military power (a vital part, one might assume, in balancing against Russian aggression).
+
+```{r, threatmean, echo = F}
+
+# This block calculates the means for the russiathreat variable for the entire sample and per country, and presents this in the data frame countrythreat
+
+threat22 <- finaldata2022[, c(3, 16)]
+
+countrythreat22 <- aggregate(replace(threat22, is.na(threat22), 0)$russiathreat, list(threat22$country), mean)
+countrythreat22 %>%
+  dplyr::rename(country = Group.1,
+         "2022" = x) -> countrythreat22
+
+threat23 <- finaldata2023[, c(3, 16)]
+
+countrythreat23 <- aggregate(replace(threat23, is.na(threat23), 0)$russiathreat, list(threat23$country), mean)
+countrythreat23 %>%
+  dplyr::rename(country = Group.1,
+         "2023" = x) -> countrythreat23
+
+countrythreat <- merge(countrythreat22, countrythreat23)
+countrythreat <- melt(countrythreat, id.vars = "country")
+
+avgthreat <- data.frame(c("Sample mean", "Sample mean"), c("2022", "2023"), c(mean(replace(threat22, is.na(threat22), 0)$russiathreat), mean(replace(threat23, is.na(threat23), 0)$russiathreat)))
+names(avgthreat) <- c("country", "variable", "value")
+countrythreat <- rbind(countrythreat, avgthreat)
+```
+
+```{r, threatdumbbell, fig.cap = "Respondents who see Russia as biggest threat to security by country (%), 2022 and 2023"}
+
+# This block displays the means of the russiathreat variable in a dumbbell plot
+
+countrythreat %>% 
+  ggplot(aes(x=value,y=reorder(country, value))) +
+  geom_line(aes(group=country), color="black", linewidth=0.2) +
+  geom_point(aes(color=variable), size=3) +
+  labs(y= "Country", x = "Threatened by Russia (%)") +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12, family = "serif", color="black")
+        ) +
+  scale_color_manual(values=c("gray", "black"))+
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1))
+
+```
+
+Roughly one third of respondents see Russia as the biggest threat to national security. Levels are especially high in Finland, Lithuania, Poland, and Sweden, where over half of the respondents perceive Russia as the single greatest threat facing their own country's security. The results are relatively stable over time, with notable decreases in Finland, Germany, the Netherlands and Italy.
+
+```{r, milmean, echo = F}
+
+# This block calculates the means for the militarist variable for the entire sample and per country, and presents this in the data frame countrymil
+
+mil22 <- finaldata2022[, c(3, 7)]
+
+countrymil22 <- aggregate(replace(mil22, is.na(mil22), 0)$militarist, list(mil22$country), mean)
+countrymil22 %>%
+  dplyr::rename(country = Group.1,
+         "2022" = x) -> countrymil22
+
+mil23 <- finaldata2023[, c(3, 7)]
+
+countrymil23 <- aggregate(replace(mil23, is.na(mil23), 0)$militarist, list(mil23$country), mean)
+countrymil23 %>%
+  dplyr::rename(country = Group.1,
+         "2023" = x) -> countrymil23
+
+countrymil <- merge(countrymil22, countrymil23)
+countrymil <- melt(countrymil, id.vars = "country")
+
+avgmil <- data.frame(c("Sample mean", "Sample mean"), c("2022", "2023"), c(mean(replace(mil22, is.na(mil22), 0)$militarist), mean(replace(mil23, is.na(mil23), 0)$militarist)))
+names(avgmil) <- c("country", "variable", "value")
+countrymil <- rbind(countrymil, avgmil)
+```
+
+```{r, mildumbbell, fig.cap = "Respondents who see the need for higher defense spending by country (%), 2022 and 2023"}
+
+# This block displays the means of the militarist variable in a dumbbell plot
+
+countrymil %>% 
+  ggplot(aes(x=value,y=reorder(country, value))) +
+  geom_line(aes(group=country), color="black", linewidth=0.2) +
+  geom_point(aes(color=variable), size=3) +
+  labs(y= "Country", x = "Supports higher military spending (%)") +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12, family = "serif", color="black")
+        ) +
+  scale_color_manual(values=c("gray", "black"))+
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1))
+
+```
+
+Contrary to the policy of some European governments, most Europeans seem to see further increases in defense spending as unnecessary, with just under 28% of respondents in 2023 answering that their own country was spending too little on defense. However, one could make the case that respondents who answered that their country was spending "about the right amount" on defense were in fact expressing support for previously announced spending increases.
+
+Without running any models just yet, a cursory glance at the data partly endorses the theoretical intuition behind the selection of these five independent variables. The graph below displays the share of respondents who support sending armed forces to help defend Ukraine in each group.
+
+```{r, ivmean, echo = F}
+
+# This block calculates sample means for support among different categories and places them in supportmeans
+
+iv22 <- finaldata2022[, c(2, 4:7, 16)]
+
+iv22 %>%
+  mutate(euidentityagg = (euidentity * trusteu * supporteu),
+         strongeu = ifelse(euidentityagg > 0, 1, 0),
+         someidentity = ifelse(euidentity > 0, 1, 0),
+         all = strongeu * russiathreat * militarist,
+         strongeusupport = strongeu * supportua,
+         someidentitysupport = someidentity * supportua,
+         trusteusupport = trusteu * supportua,
+         supporteusupport = supporteu * supportua,
+         russiathreatsupport = russiathreat * supportua,
+         militaristsupport = militarist * supportua,
+         allsupport = strongeusupport * russiathreatsupport * militaristsupport,
+         across(everything(), replace_na, 0)
+         ) -> iv22
+
+data.frame(colMeans(iv22)) -> iv22means
+
+supportmeans22 <- data.frame(c("European institutionalists", "Identifies as European", "Trusts the EU", "Supports the EU", "Sees Russia as biggest threat", "Wants more military spending", "Sample mean", "Yes on all IVs"), c(iv22means[11, 1] / iv22means[8, 1], iv22means[12, 1] / iv22means[9, 1], iv22means[13, 1] / iv22means[3, 1], iv22means[14, 1] / iv22means[4, 1], iv22means[15, 1] / iv22means[6, 1], iv22means[16, 1] / iv22means[5, 1], mean(replace(finaldata2022, is.na(finaldata2022), 0)$supportua), iv22means[17 , 1] / iv22means[10, 1]))
+
+iv23 <- finaldata2023[, c(2, 4:7, 16)]
+
+iv23 %>%
+  mutate(euidentityagg = (euidentity * trusteu * supporteu),
+         strongeu = ifelse(euidentityagg > 0, 1, 0),
+         someidentity = ifelse(euidentity > 0, 1, 0),
+         all = strongeu * russiathreat * militarist,
+         strongeusupport = strongeu * supportua,
+         someidentitysupport = someidentity * supportua,
+         trusteusupport = trusteu * supportua,
+         supporteusupport = supporteu * supportua,
+         russiathreatsupport = russiathreat * supportua,
+         militaristsupport = militarist * supportua,
+         allsupport = strongeusupport * russiathreatsupport * militaristsupport,
+         across(everything(), replace_na, 0)
+         ) -> iv23
+
+data.frame(colMeans(iv23)) -> iv23means
+
+supportmeans23 <- data.frame(c("European institutionalists", "Identifies as European", "Trusts the EU", "Supports the EU", "Sees Russia as biggest threat", "Wants more military spending", "Sample mean", "Yes on all IVs"), c(iv23means[11, 1] / iv23means[8, 1], iv23means[12, 1] / iv23means[9, 1], iv23means[13, 1] / iv23means[3, 1], iv23means[14, 1] / iv23means[4, 1], iv23means[15, 1] / iv23means[6, 1], iv23means[16, 1] / iv23means[5, 1], mean(replace(finaldata2023, is.na(finaldata2023), 0)$supportua), iv23means[17 , 1] / iv23means[10, 1]))
+
+supportmeans <- merge(supportmeans22, supportmeans23)
+names(supportmeans) <- c("modelvariable", "2022", "2023")
+supportmeans <- melt(supportmeans, id.vars = "modelvariable")
+
+```
+
+```{r, ivdumbbell, fig.cap = "Support for sending armed forces by category (%), 2022 and 2023"}
+
+# This block displays the means of support for different categories in a dumbbell plot
+
+supportmeans %>% 
+  ggplot(aes(x=value,y=reorder(modelvariable, value))) +
+  geom_line(aes(group=modelvariable), color="black", linewidth=0.2) +
+  geom_point(aes(color=variable), size=3) +
+  labs(y= "Category", x = "Support (%)") +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12, family = "serif", color="black")
+        ) +
+  scale_color_manual(values=c("gray", "black"))+
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1))
+
+```
+
+The level of support in each of the categories above are all higher than the sample mean, and are quite stable between 2022 and 2023. Most notably, in the group who are coded positively for all independent variables, i.e. the 4% of the sample who self-identify as European to some extent, trust and support the EU, want higher national defense spending and see Russia as the biggest threat to their own country's security, the level of support for sending armed forces to help defend Ukraine in 2023 was a staggering 68% - around 58% above the sample mean, in relative terms.
+
+## Control variables
+Six variables are introduced to control for individual characteristics. These include four dummy variables controlling for post-secondary education, unemployment, urban residency and gender. An income variable is included, indicating the respondent's self-described economic standing compared to other people their age on a scale between 0 and 4, as well as an age variable reflecting the respondent's age group on a scale between 0 (18--24 years old) and 4 (55+ years old).
+
+Two additional variables are included to control for individual preferences. A variable reflecting the respondent's ideological sympathies on a seven-point left-right scale is added, as well as a dummy variable for respondents who indicated that they were willing to take risks in general. Military interventions are, by definition, risky endeavors, and one might assume that risk-averse individuals are also less likely to support sending armed forces to another country.
+
+As previously mentioned, only complete observations are included in the final model. Summary statistics for variables included are presented below.
+
+```{r, sumstats}
+
+# This block calculates summary statistics
+
+varsfortable <- c("supportua", "euidentity", "trusteu", "supporteu", "militarist", "russiathreat", "ps", "unemployed", "urban", "age", "female", "income", "ideology", "risktaker")
+
+varlabelsfortable <- c("Supports armed forces to Ukraine", "European identity", "Trusts the EU",
+                       "Supports EU membership", "Wants more military spending", 
+                       "Sees Russia as a threat", "Post-secondary education", "Unemployed", 
+                       "Urban or suburban resident", "Age", "Female", "Income", "Ideology", 
+                       "Prefers taking risks")
+
+summary_table22 <- finaldata2022 %>%
+  dplyr::select(all_of(varsfortable)) %>%
+  summarise(across(everything(), list(
+    `NA (%)` = ~mean(is.na(.)) * 100,
+    Mean = ~mean(., na.rm = TRUE),
+    Median = ~median(., na.rm = TRUE),
+    `Std Dev` = ~sd(., na.rm = TRUE),
+    Min = ~min(., na.rm = TRUE),
+    Max = ~max(., na.rm = TRUE)
+  ))) %>%
+  tidyr::pivot_longer(everything(),
+                      names_to = c("Variable", "Statistic"),
+                      names_sep = "_") %>%
+  tidyr::pivot_wider(names_from = Statistic, values_from = value) %>%
+  mutate(across(where(is.numeric), ~round(., 2))) %>%
+  mutate(Variable = varlabelsfortable) %>%
+  mutate(`NA (%)` = paste0(round(`NA (%)`, 1), "%"))
+
+summary_table23 <- finaldata2023 %>%
+  dplyr::select(all_of(varsfortable)) %>%
+  summarise(across(everything(), list(
+    `NA (%)` = ~mean(is.na(.)) * 100,
+    Mean = ~mean(., na.rm = TRUE),
+    Median = ~median(., na.rm = TRUE),
+    `Std Dev` = ~sd(., na.rm = TRUE),
+    Min = ~min(., na.rm = TRUE),
+    Max = ~max(., na.rm = TRUE)
+  ))) %>%
+  tidyr::pivot_longer(everything(),
+                      names_to = c("Variable", "Statistic"),
+                      names_sep = "_") %>%
+  tidyr::pivot_wider(names_from = Statistic, values_from = value) %>%
+  mutate(across(where(is.numeric), ~round(., 2))) %>%
+  mutate(Variable = varlabelsfortable) %>%
+  mutate(`NA (%)` = paste0(round(`NA (%)`, 1), "%"))
+
+```
+
+```{r, sumstats22display}
+
+summary_table22 %>%
+  as.data.frame() %>%
+  kable(format = "latex", booktabs = TRUE, caption = "Summary statistics for variables included in the main model, 2022", linesep = "", longtable = TRUE, escape = TRUE) %>%
+  kable_styling(font_size = 12, latex_options = c("hold_position", "repeat_header")) %>%
+  row_spec(0, bold = TRUE)
+
+```
+
+```{r, sumstats23display}
+
+summary_table23 %>%
+  as.data.frame() %>%
+  kable(format = "latex", booktabs = TRUE, caption = "Summary statistics for variables included in the main model, 2023",linesep = "", longtable = TRUE, escape = TRUE) %>%
+  kable_styling(font_size = 12, latex_options = c("hold_position", "repeat_header")) %>%
+  row_spec(0, bold = TRUE)
+
+```
+
+# Model
+Looking at the data, we have a number of variables where we expect the effects to be relatively similar across the entire population (i.e., our independent and control variables). At the same time, the hypothesized links that we are exploring will obviously not explain *all* observed variation within the data. In addition, as can be seen in the descriptive statistics presented in the previous section, we can expect significant correlation between observations from the same country.
+
+As our data is hierarchical at the country level, a mixed effects model is used. This model allows for both fixed effects for included variables, as well as random effects by country. The mixed model can be written as
+$$y = X\beta + Zb + \epsilon,$$
+where $y$ denotes the response vector, $X\beta$ the product of the design matrix and the coefficient vector, $Zb$ the product of the matrix of covariates and the random effects vector, and $\epsilon$ the vector of residual errors (for a thorough discussion on mixed-effects models, see @galecki2013).
+
+A key assumption of the linear model is that the dependent variable is a linear function of some continuous and/or categorical independent variables. In this case, the assumption regarding the dependent variable is obviously violated, as it consists of a binary variable (and thus assuming values of either 0 or 1). To account for this, a generalized linear model is more appropriate (see, for instance, @dunteman2006).
+
+Here, we make use of a link function $\eta(x)$ so that 
+
+$$\eta(x) = \log(\frac{p}{1-p}) = X\beta + Zb + \epsilon,$$ 
+
+where $\log(\frac{p}{1-p})$ denotes the log-transformed odds for the event occurring, in our case the respondent answering in the affirmative to the question for the dependent variable. The results generated by the model can thus be understood as the effect of each included variable on the log-adjusted odds of a respondent supporting sending armed forces to help defend Ukraine. For a longer discussion on the logit model and its applications, see @miller2024.
+
+The main model is run twice, once for 2022 and once for 2023. Results are then compared between the two years to identify which variables achieve significance over both years, thus indicating a relatively stable systemic effect.
+
+```{r, mainmodel, echo = F}
+
+# This block runs the main model for 2023 and 2022
+
+M1 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 | country), 
+            data = finaldata2022, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+M2 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 | country), 
+            data = finaldata2023, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+models <- list(
+  "2022" = M1,
+  "2023" = M2)
+```
+
+# Results and analysis
+The results of the main model are displayed in the table below.
+
+```{r, mainmodeldisplay}
+
+tjur_22 <- performance::r2_tjur(M1)
+tjur_23 <- performance::r2_tjur(M2)
+
+add_rows_df <- data.frame(
+  term = "Tjur's R²",
+  Model1 = tjur_22,
+  Model2 = tjur_23
+)
+
+gof_map <- data.frame(
+  raw = c("nobs", "r2.conditional", "r2.marginal"),
+  clean = c("N", "Conditional R²", "Marginal R²"),
+  fmt = c(0, 3, 3)
+)
+
+# This block displays the main model
+modelsummary(models, 
+             title = 
+               "Individual support for sending armed forces to help 
+             defend Ukraine, 2022 and 2023",
+             stars = c('*' = .1, '**' = .05, '***' = 0.01),
+             gof_map= gof_map,
+             coef_map = c("euidentity" = "European identity",
+                          "trusteu" = "Trusts the EU", 
+                          "supporteu" = "Supports EU membership",
+                          "russiathreat" = "Sees Russia as a threat",
+                          "militarist" = "Wants more military spending",
+                          "ps" = "Post-secondary education", 
+                          "unemployed" = "Unemployed",
+                          "urban" = "Urban or suburban resident",
+                          "age" = "Age",
+                          "female" = "Female",
+                          "income" = "Income",
+                          "ideology" = "Ideology",
+                          "risktaker" = "Prefers taking risks",
+                          "(Intercept)" = "Intercept"),
+            add_rows = add_rows_df) %>%
+  group_tt(i = list("Independent variables" = 1,
+                    "Control variables" = 11)) %>%
+  style_tt(i = c(1, 12), bold = TRUE) %>%
+  strip_tt(line=TRUE) %>%
+  style_tt(i = c(30), line="b", line_color = "black") %>%
+  style_tt(i = c(0), bold = TRUE) %>% 
+  theme_tt("spacing", rowsep = 0) %>%
+  theme_tt("multipage", width = .8) %>%
+  theme_tt("placement", latex_float ="h")
+
+```
+
+These results demonstrate a statistically significant positive impact on the log-adjusted odds for an individual supporting sending armed forces to help defend Ukraine for all five independent variables across both years. In addition, three control variables impact the results in both 2022 and 2023, albeit with varying degrees of significance.
+
+To being with, the three identity variables -- European self-identification, trust in the EU, and support for the EU -- all contribute positively to the probability of an individual expressing support for military intervention. The greatest impact is displayed by the trust variable (a roughly 20% impact on the probability), followed by the support and self-identification variables. Based on this, we can draw two conclusions.
+
+First, that European identity, as measured by these three variables, seems to have a substantial impact on individual decision-making on this issue. That all three identity variables display high levels of significance in both the 2022 and 2023 models indicate the presence of a relatively stable, systemic effect. This can be seen as confirmation of the first hypothesis. Second, that a broad definition of identity, including European self-identification, as well as trust in and support for the European union, is clearly relevant here. This might suggest that a common, and relatively widespread, European identity is only partly centered around *feeling* European. Trust in and support for the EU seems to play a large role as well, possibly reflecting the fact that European identity to a large extent is built around shared values regarding democracy and the rule of law, forming the basis for an identity closely linked to institutionalism.
+
+Both variables capturing threat perception -- seeing Russia as the greatest threat to security, and wanting more military spending -- are also statistically significant. This can be interpreted as confirming the second hypothesis, as well as partly confirming the first. However, as the pathways linking identity and physical security concerns to image formation, and by extension support for military intervention, are partly overlapping, some care must be taken in unpacking these results.
+
+What the results regarding these two variables show is not definitive proof that European identity influences the perception of Russia as a threat. It does, however, indicate that such a link may exist. But since physical security concerns are hypothesized to influence this part of individual image formation as well,  isolating one from the other is not possible with the current model specification. So, while the conclusion can be drawn that the perception of Russia as a threat (and, thus, the harboring of a barbarian image of Russia) raises the probability of an individual supporting sending armed forces to help defend Ukraine, we cannot state with certainty that this is due to the presence of a common European identity. What we can say, however, is that such a link *seems* to exist, and that this constitutes an interesting topic for future study on image formation in general, and European views on Russia in particular.
+
+The third hypothesis concerns the stability of the results over time. Here, the results of the main model confirm this hypothesis, but only partly. This is due to the limitations of available data. We can say, with some certainty, that the link between identity and support for military intervention is stable over the time period studied. But since this time period is limited to only one year, this stability can be called into question. To further confirm the third hypothesis, the temporal scope would need to be expanded to include data over longer periods of time, pointing to another avenue for future research.
+
+On a side note, the significance of three control variables over both years deserve a short comment. That risk-takers are more likely to support military interventions seems quite intuitive. The negative effect from age, and the higher support from females are, however, not as easy to explain. As will be shown in the next section, the results of some robustness checks call the significance of the gender variable into question, disputing its overall theoretical significance. Age, however, holds up to all robustness checks. That older generations, given historical experiences of the Cold War as well as other conflicts on the European continent, are more pacifist in general makes some intuitive sense. However, further research and theorizing is needed to confirm and describe this effect.
+
+Returning to the original research questions, an answer to both can now be formulated: A common European identity is a main factor in explaining whether a European citizen supports sending armed forces to help defend Ukraine. This effect is theorized to influence the formation of images of Russia as a barbarian and Ukraine as an ally, and thus contributing to individual support for military intervention. However, it cannot be ruled out that other factors, primarily physical security concerns, also contribute to promoting the image of Russia as a barbarian. In addition, young age and risk-taking preferences are influential factors. The significance of these factors have not changed between 2022 and 2023. Furthermore, certain individual factors such as right-wing ideology, gender, non-urban residence and the lack of a post-secondary education serve as explanatory factors. These factors, however, are either not stable over time, and/or do not hold up to the robustness checks presented in the following section.
+
+On a more general note, a few remarks can be made regarding the theoretical dimensions of the findings presented above. One interesting line of reasoning emerges regarding the importance of European, as opposed to national, identity. Assuming that individuals hold a number of relevant identities related to different social groups, determining which of these play the biggest role in influencing opinions and behavior becomes an intricate endeavor. In the model employed above, the self-identification variable can be seen as a measurement of relative strength between national and European identities. That is, an individual might identify very strongly as a European, but as long as that individual also holds an even stronger national identity, this would be reflected in the data as lacking support for European identity. The potential interplay between different identities in general, and national and European identities in particular, illustrates the complexities of theorizing on identity formation.
+
+The role of identity in international relations is contested. Based on the results above, this thesis adds to the literature arguing that identity does indeed play a role in shaping how individuals see the world, and by extension how states act on the world stage. Identities seem to matter also for major decisions where the stakes are very high. A European military intervention conducted to defend Ukraine from Russia would very likely lead to an escalation from an isolated conflict, to a major regional war. Even when the stakes are this high, identity seems to play a significant role in individual decision making. For a large number of Europeans, military intervention is not only seen as an alternative to protect one's own physical security -- but also something that can, and should, be used in the defense of a common European construct, where Ukraine is considered to be a part. 
+
+Another aspect worth mentioning concerns the links between social identities and public opinion. In this thesis, this link is explained primarily by image theory. However, this relationship is in all likelihood far more complex than this simple theoretical abstraction might suggest. Further exploring, and explaining, how identities shape individual opinions on foreign policy and thus, by extension, influence the policies pursued by governments, is a highly relevant topic for future research. Also the application of image theory itself deserves further scrutiny. Here, one could argue that several images are relevant, in addition to the two used in this thesis. The decision to focus on only two -- the ally and barbarian images -- was made to promote analytically clarity, but it may very well be the case that other images are of relevance as well. How, and why, individuals form certain images, as well as how these images in turn shape foreign policy considerations, constitutes a fruitful avenue for future research.
+
+The results from this thesis add to the existing empirical evidence concerning the different factors that shape opinions on military intervention. How feelings, beliefs and personal values contribute to the interpretation of information regarding foreign actors, both by influencing image formation and through other mechanisms, and how these interpretations in turn shape individual preferences for certain policy responses, is a complex topic to tackle. Here, opinions on military interventions are of particular interest, as they constitute examples of high-risk and potentially very costly decisions.
+
+Given that the issue of support for Ukraine has been heavily politicized in several European countries, the connection between European identity and partisanship is worth exploring further. Skepticism towards the Ukrainian war effort, and in some cases more or less explicit support for Russian narratives, have become commonly held views among some of Europe's right-wing parties. The fault lines among the European population on sending armed forces to Ukraine run deep, and can be tied to both competing European and national identities, as well as views on the political establishment. This relationship between identity and partisanship in Europe is a highly relevant topic, where a continued investigation of both its causes and effects are key to furthering our understanding of the issue of public opinion on Ukraine.
+
+From a policy perspective, the results of this thesis contributes to a deeper understanding of the role played by identity on this particular issue. This means that policy-makers tackling the question of how to aid Ukraine in the future would do well to reflect on not only the immediate and obvious considerations, but also on the deeper factors at play here. How one's government responds to this historic situation seems to touch at the very core of how individuals see themselves, primarily based on which group(s) they identify with. This, in turn, contributes to a complex dynamic which can easily lead to heightened partisanship. Managing the expectations and interests of both those who strongly identify with a European identity that includes Ukraine, and those who lack such an identity, while at the same time ensuring that national security concerns regarding the war are met, remains as perhaps the biggest foreign policy challenge facing European decision-makers in a generation.
+
+# Robustness checks and alternative analyses{#robustnesschecks}
+In this section different aspects related to the robustness of the results, as well as alternative analyses of interest, are explored. First, an analysis of the variations of the random effects are presented. Following this, answers of "I don't know" to the question for the dependent variable are analysed further through a separate fence-sitter model. Third, missing values for independent and control variables are addressed through artificial replacements. Finally, further model diagnostics and results from an alternative specification of the main model are presented.
+
+## Random effects
+The graphs below present the random intercepts, which vary by country, for the 2022 and 2023 models.
+
+```{r, ranef, fig.cap = "Random effects by country, 2022 and 2023"}
+
+# This block displays the random effects by country for the main model
+
+RE22 <- show_ranef(M1, "country")
+RE23 <- show_ranef(M2, "country")
+
+RE22graph <- RE22 + 
+  ggtitle("2022") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE23graph <- RE23 + 
+  ggtitle("2023") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+grid.arrange(RE22graph, RE23graph, ncol=2)
+
+```
+
+As can be expected, we see substantial variations between the different countries in the sample. Slovakia, Romania, Hungary, Greece, Germany and Bulgaria all exhibit significant negative impacts on the dependent variable for both years included in the study. The random effects in Lithuania, Netherlands, Poland, Spain, Sweden, the UK, France and Finland, on the other hand, are positive for both years. This indicates the presence of country-level differences not fully captured by the variables included in the model. For Croatia, Denmark and Italy, the country-level effects are negligible or inconsistent between the two time periods studied.
+
+Adjustments to the model that might decrease country-level effects are difficult to identify. Given the spread between the random effects of the different countries, groupings of East/West or center/periphery, as well as proximity to Russia, would in all likelihood fail to capture the observed differences. The most probable explanation to the remaining variations between countries can be found in the different historical, cultural and political factors that are more or less unique to each state. These factors seem to be controlled for in a satisfactory manner in the main model through the inclusion of random effects at the country level.
+
+By altering the model to introduce random effects for an additional independent variable, we can allow the slopes to vary by country. In the graphs below, this is done for each of the three identity variables in turn.
+
+```{r, ranefslope}
+
+# This block runs three alternative models for both years
+# with random effects for euidentity, trusteu and supporteu
+
+REM1 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 + euidentity | country), 
+            data = finaldata2022, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+REM2 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 + euidentity | country), 
+            data = finaldata2023, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+REM3 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 + trusteu | country), 
+            data = finaldata2022, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+REM4 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 + trusteu | country), 
+            data = finaldata2023, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+REM5 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 + supporteu | country), 
+            data = finaldata2022, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+REM6 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 + supporteu | country), 
+            data = finaldata2023, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+RE_identity22 <- show_ranef(REM1, "country") + facet_wrap_paginate(~term, ncol = 1, nrow = 1, page = 2)
+RE_identity23 <- show_ranef(REM2, "country") + facet_wrap_paginate(~term, ncol = 1, nrow = 1, page = 2)
+RE_trust22 <- show_ranef(REM3, "country") + facet_wrap_paginate(~term, ncol = 1, nrow = 1, page = 2)
+RE_trust23 <- show_ranef(REM4, "country") + facet_wrap_paginate(~term, ncol = 1, nrow = 1, page = 2)
+RE_support22 <- show_ranef(REM5, "country") + facet_wrap_paginate(~term, ncol = 1, nrow = 1, page = 2)
+RE_support23 <- show_ranef(REM6, "country") + facet_wrap_paginate(~term, ncol = 1, nrow = 1, page = 2)
+
+```
+
+```{r, ranefslopeidentity, fig.cap = "Random effects of self-identification variable by country, 2022 and 2023"}
+
+# This block displays the random effects of the self-identification variable 
+# by country
+
+RE_identity23graph <- RE_identity23 + 
+  ggtitle("2023") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text.x.top = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE_identity22graph <- RE_identity22 + 
+  ggtitle("2022") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text.x.top = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE_identity22graph + RE_identity23graph
+
+```
+
+```{r, ranefslopetrust, fig.cap = "Random effects of trust variable by country, 2022 and 2023"}
+
+# This block displays the random effects of the trust variable 
+# by country
+
+RE_trust23graph <- RE_trust23 + 
+  ggtitle("2023") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text.x.top = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE_trust22graph <- RE_trust22 + 
+  ggtitle("2022") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text.x.top = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE_trust22graph + RE_trust23graph
+
+```
+
+```{r, ranefslopesupport, fig.cap = "Random effects of support variable by country, 2022 and 2023"}
+
+# This block displays the random effects of the support variable 
+# by country
+
+RE_support23graph <- RE_support23 + 
+  ggtitle("2023") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text.x.top = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE_support22graph <- RE_support22 + 
+  ggtitle("2022") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text.x.top = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE_support22graph + RE_support23graph
+
+```
+
+The results presented in the graphs above indicate variations in the random effects from the identity variables between countries. Effects in most countries, however, are not significantly different from the average population effect, indicating a significant and positive pan-national effect from these variables. A few outliers are worth mentioning. When taking the results from both years into account, Hungary, Bulgaria and Slovakia exhibit higher effects from two of three identity variables. These three countries are also among the most skeptical to supporting Ukraine, indicating that European identity further influences behavioral patterns in countries where overall skepticism towards the issue is high. For four additional countries -- Sweden, the UK, Denmark and Poland -- where, incidentally, the average levels of support are higher than the mean, the effects are instead below the average for at least two identity variables. 
+
+Next, the same analysis is conducted on the two independent variables denoting threat perception. The results are displayed in the graphs below.
+
+```{r, ranefslope2}
+
+# This block runs two alternative models
+# with random effects for russiathreat and militarist
+
+REM7 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 + russiathreat | country), 
+            data = finaldata2022, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+REM8 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 + russiathreat | country), 
+            data = finaldata2023, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+REM9 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat +
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 + militarist | country), 
+            data = finaldata2022, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+REM10 <- glmer(supportua ~ euidentity + trusteu + supporteu + russiathreat +
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 + militarist | country), 
+            data = finaldata2023, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+RE_russiathreat22 <- show_ranef(REM7, "country") + facet_wrap_paginate(~term, ncol = 1, nrow = 1, page = 2)
+RE_russiathreat23 <- show_ranef(REM8, "country") + facet_wrap_paginate(~term, ncol = 1, nrow = 1, page = 2)
+RE_militarist22 <- show_ranef(REM9, "country") + facet_wrap_paginate(~term, ncol = 1, nrow = 1, page = 2)
+RE_militarist23 <- show_ranef(REM10, "country") + facet_wrap_paginate(~term, ncol = 1, nrow = 1, page = 2)
+
+remodels22 <- list(
+  "Identity" = REM1,
+  "Trust" = REM3,
+  "Support" = REM5,
+  "Threat" = REM7,
+  "Militarist" = REM9)
+
+remodels23 <- list(
+  "Identity" = REM2,
+  "Trust" = REM4,
+  "Support" = REM6,
+  "Threat" = REM8,
+  "Militarist" = REM10)
+
+```
+
+```{r, ranefslopethreat, fig.cap = "Random effects of threat variable by country, 2022 and 2023"}
+
+# This block displays the random effects of the threat variable 
+# by country
+
+RE_russiathreat23graph <- RE_russiathreat23 + 
+  ggtitle("2023") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text.x.top = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE_russiathreat22graph <- RE_russiathreat22 + 
+  ggtitle("2022") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text.x.top = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE_russiathreat22graph + RE_russiathreat23graph
+
+```
+
+```{r, ranefslopemilitarist, fig.cap = "Random effects of militarist variable by country, 2022 and 2023"}
+
+# This block displays the random effects of the support variable 
+# by country
+
+RE_militarist23graph <- RE_militarist23 + 
+  ggtitle("2023") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text.x.top = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE_militarist22graph <- RE_militarist22 + 
+  ggtitle("2022") +
+  labs(y= "Country", x = "Levels of the random effect") +
+  scale_x_continuous(limits = c(-2, 2)) +
+  theme_minimal() +
+  theme(title = element_text(size = 12, family = "serif", color="black"),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        strip.text.x.top = element_blank(),
+        plot.title = element_text(hjust = 0.5)
+        )
+
+RE_militarist22graph + RE_militarist23graph
+
+```
+
+The random effects from the two threat variables are roughly in line with the population average. Once again, Slovakia and Bulgaria stand out with an above-average effect from perceiving Russia as a threat for both years. Taken together, the results from including additional random effects indicate that the main model represents population-level fixed effects related to the five independent variable in a relatively satisfactory manner. The addition of random effects for each of the five independent variables in turn do not alter the significance for the independent variables in the main model. Full results from these five additional models are displayed in the [appendix](#randomslope).
+
+## A closer look at the fence-sitters{#fencesitters}
+
+As has been previously mentioned, out of all otherwise complete observations roughly 11 % are dropped from the main model due to answers of "I don't know" for the dependent variable. Given that these ~ 1 400 respondents for 2022 and ~ 1 000 respondents for 2023 have given definitive answers to all other relevant questions, one could assume that they have given the issue of sending armed forces to help defend Ukraine some thought, but decided that they simply don't know if it is a correct course of action or not. Adopters of this fence-sitting approach are worth a closer look.
+
+A new model is constructed, where the dependent variable consists of a binary variable coded to 1 if the respondent answered that they would or would not be willing to send armed forces to help defend Ukraine. 0 denotes respondents who answered that they didn't know (interpreted here as a lack of willingness to take a definitive stance). Only observations that are otherwise complete are included, and all other variables are kept the same as in the main model.
+
+```{r, fencesittermodel, echo = F}
+finaldata2022 %>%
+  mutate(
+    supportuafence = case_when(
+      supportua == 0 ~ 1,
+      supportua == 1 ~ 1,
+      ),
+    supportuafence = replace_na(supportuafence, 0)
+    ) -> finaldata2022
+
+finaldata2023 %>%
+  mutate(
+    supportuafence = case_when(
+      supportua == 0 ~ 1,
+      supportua == 1 ~ 1,
+      ),
+    supportuafence = replace_na(supportuafence, 0)
+    ) -> finaldata2023
+
+M3 <- glmer(supportuafence ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 | country), 
+            data = finaldata2022, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+M4 <- glmer(supportuafence ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker + (1 | country), 
+            data = finaldata2023, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+fencemodels <- list(
+  "2022" = M3,
+  "2023" = M4)
+```
+
+```{r, fencesitterdisplay}
+
+# This block displays the results of the fencesitter model
+
+gof_map <- data.frame(
+  raw = c("nobs", "r2.conditional", "r2.marginal"),
+  clean = c("N", "Conditional R²", "Marginal R²"),
+  fmt = c(0, 3, 3)
+)
+
+modelsummary(fencemodels, 
+             title = 
+               "Likelihood of an individual taking a stance, 2022 and 2023",
+             stars = c('*' = .1, '**' = .05, '***' = 0.01),
+             gof_map = gof_map,
+             coef_map = c("euidentity" = "European identity",
+                          "trusteu" = "Trusts the EU", 
+                          "supporteu" = "Supports EU membership",
+                          "russiathreat" = "Sees Russia as a threat",
+                          "militarist" = "Wants more military spending",
+                          "ps" = "Post-secondary education", 
+                          "unemployed" = "Unemployed",
+                          "urban" = "Urban or suburban resident",
+                          "age" = "Age",
+                          "female" = "Female",
+                          "income" = "Income",
+                          "ideology" = "Ideology",
+                          "risktaker" = "Prefers taking risks",
+                          "(Intercept)" = "Intercept")) %>%
+  group_tt(i = list("Independent variables" = 1,
+                    "Control variables" = 11)) %>%
+  style_tt(i = c(1, 12), bold = TRUE) %>%
+  strip_tt(line=TRUE) %>%
+  style_tt(i = c(30), line="b", line_color = "black") %>%
+  style_tt(i = c(0), bold = TRUE) %>% 
+  theme_tt("spacing", rowsep = 0) %>%
+  theme_tt("multipage", width = .8) %>%
+  theme_tt("placement", latex_float ="h")
+
+```
+
+At first glance, the results of this model are quite interesting. We find that two aspects of identity -- European self-identification and trust in the EU -- have a negative effect on the willingness to take a stand on the issue. How this should be interpreted is not as clear-cut, but it might indicate that the presence of strong nationalist sentiments (and thus, the lack of European identity) serves as a driving factor in individual decision-making. This is partly supported by the fact that right-wing ideology, often related to nationalist sympathies, also lowers the likelihood of an individual remaining on the fence.
+
+Regarding control variables, gender is once again a factor. Here, respondents who identify as female seem to be more likely to avoid taking a stance on the issue. Finally, that risk-takers are more likely to take a definitive stance seems relatively self-explanatory. This model, however, comes with some major caveats, primarily related to the low n for the number of fence-sitters. The lower significance for some of the variables, the low conditional $R^2$, as well as some substantial variations between the two years, serve as a warning to interpret the results with a high degree of caution. This will be expanded further in the next section.
+
+## Replacement of missing values
+Since only complete observations are included in the main model, just over 50 % of observations are dropped for both years. This is a substantial number. The effects on the model are, of course, difficult to ascertain. One way of investigating this further is to determine how large of an impact the exclusion of incomplete observations has on the means of the variables included in the main model.
+
+```{r, completecases, echo = F}
+
+# This block checks if the case is complete, both with and without the DV
+
+finaldata2023$completecase <- complete.cases(finaldata2023)
+finaldata2022$completecase <- complete.cases(finaldata2022)
+
+finaldata2023$completecasesubmain <- complete.cases(finaldata2023[-c(2)])
+finaldata2022$completecasesubmain <- complete.cases(finaldata2022[-c(2)])
+
+```
+
+```{r, meandifferencecalculate, echo = F}
+
+# This block compares differences in means between complete cases and
+# total cases, where total = complete + incomplete
+
+completemeans22 <- colMeans(finaldata2022[finaldata2022$completecase == TRUE, -c(1, 3, 17, 18, 19)], na.rm = TRUE)
+allmeans22 <- colMeans(finaldata2022[-c(1, 3, 17, 18, 19)], na.rm = TRUE)
+
+completemeans23 <- colMeans(finaldata2023[finaldata2023$completecase == TRUE, -c(1, 3, 17, 18, 19)], na.rm = TRUE)
+allmeans23 <- colMeans(finaldata2023[-c(1, 3, 17, 18, 19)], na.rm = TRUE)
+
+means22 <- data.frame (completemeans22, allmeans22)
+means23 <- data.frame(completemeans23, allmeans23)
+
+means22$difference22 <- with(means22, percent(completemeans22/allmeans22-1, digits = 0))
+means23$difference23 <- with(means23, percent(completemeans23/allmeans23-1, digits = 0))
+
+meansdiff <- merge(means23, means22, by = "row.names", all = TRUE)
+```
+
+```{r, meandifferencetable, fig.cap = "Differences in means between complete observations and all observations, 2022 and 2023"}
+
+# This block displays a table of the differences in means
+
+varlabelsfortable2 <- c("Prefers taking risks", "Trusts the EU", "European identity", 
+                        "Post-secondary education", "Urban or suburban resident", 
+                        "Income", "Age", "Wants more military spending", 
+                        "Sees Russia as a threat", "Supports EU membership", 
+                        "Supports armed forces to Ukraine", "Ideology", "Female", "Unemployed")
+
+rownames(meansdiff) <- NULL
+
+meansdiff[order(meansdiff$difference23, decreasing = TRUE),] %>%
+            mutate(Variable = varlabelsfortable2) %>%
+  dplyr::select(Variable, difference22, difference23) %>%
+  {rownames(.) <- NULL; .} %>%
+            kbl(.,
+            format = "latex", 
+            booktabs = TRUE,
+            escape = TRUE,
+            align = c("lcc"),
+            col.names = c("Variable", "Difference 22", "Difference 23"),
+            caption = 
+              "Difference between means based on complete and total cases",
+            linesep = "",
+            longtable = TRUE,
+            rownames = FALSE)  %>%
+            row_spec(0, bold=TRUE) %>%
+            kable_styling(latex_options = c("hold_position"))
+
+```
+
+From the table above, we can see that the differences between complete and total observations in the means for the included variables are quite small for most variables (including for the dependent variable). However, the exclusion of incomplete observations significantly affects the share of female and unemployed respondents negatively, as well as increasing the share of observations where the respondents self-identified as European, indicated trust in the EU, or expressed a willingness to take risks. These in- and deflations of the means are prevalent in both years studied. Similar differences across both years indicate a systemic issue.
+
+Trying to rectify the situation is associated with some obvious limitations. But a rudimentary adjustment based on the recreation of missing data can serve as an indicator of how the results of the main model are affected. The observations of interest here are those where the respondent answered the question for the dependent variable, but left a response of "I don't know" for one or several of the other variables. An overview of these responses is presented below.
+
+```{r, missingvaluesoverview}
+
+# This block calculates the number of missing values for different categories,
+# and displays them in a table
+
+finaldata2022 %>%
+  mutate(
+    dvyes_ivcontrolno = ifelse(is.na(supportua) == FALSE & completecasesubmain == FALSE, TRUE, FALSE),
+    missingdvcont = rowSums(is.na(finaldata2022[4:16])),
+    ivcontrolno_under4 = ifelse(missingdvcont < 4, TRUE, FALSE),
+    dvyes_ivcontrolno_under4 = ifelse(dvyes_ivcontrolno == TRUE & missingdvcont < 4, TRUE, FALSE)
+      ) -> finaldata2022
+
+finaldata2023 %>%
+  mutate(
+    dvyes_ivcontrolno = ifelse(is.na(supportua) == FALSE & completecasesubmain == FALSE, TRUE, FALSE),
+    missingdvcont = rowSums(is.na(finaldata2023[4:16])),
+    ivcontrolno_under4 = ifelse(missingdvcont < 4, TRUE, FALSE),
+    dvyes_ivcontrolno_under4 = ifelse(dvyes_ivcontrolno == TRUE & missingdvcont < 4, TRUE, FALSE)
+      ) -> finaldata2023
+
+missingvalues <- data.frame(
+  type = c("Complete DV, incomplete IV and/or controls", "1-3 values missing", "4 or more values missing"),
+  value22 = c(sum(finaldata2022$dvyes_ivcontrolno), sum(finaldata2022$dvyes_ivcontrolno_under4), sum(finaldata2022$dvyes_ivcontrolno)-sum(finaldata2022$dvyes_ivcontrolno_under4)),
+  value23 = c(sum(finaldata2023$dvyes_ivcontrolno), sum(finaldata2023$dvyes_ivcontrolno_under4), sum(finaldata2023$dvyes_ivcontrolno)-sum(finaldata2023$dvyes_ivcontrolno_under4))
+  )
+
+missingvalues %>%
+            kbl(.,
+            col.names = c(" ", "2022", "2023"),
+            caption = 
+              "Missing values for observations with complete DV",
+            linesep = "",
+            longtable = TRUE, booktabs = TRUE) %>%
+            row_spec(0, bold=TRUE) %>%
+            kable_styling(latex_options = c("hold_position"))
+```
+
+From the table above we learn that most observations containing missing values, where the respondent provided a definitive answer to the question for the dependent variable, are limited to between one and three missing independent and/or control variables. These respondents, with up to and including three missing relevant variables, will form the basis for attempts to artificially replicate missing data.
+
+For three key variables -- age, gender and country -- respondents were forced to select an option. Based on these results, an index of the 170 ($2\cdot5\cdot17$) different age/gender/country combinations available is constructed. Building on this index, the entire sample is split into 170 groups, where means for the independent and control variables are calculated individually for each of the 170 groups. These artificial measurements are then plugged into the relevant observations (i.e, those where the dependent variable is 0 or 1, but where up to and including three independent and/or control variables are missing). The main model is then run using this data.
+
+```{r, missingvaluesreplace}
+
+# This block adds an index to each observation based on gender, age and country
+
+finaldata2022 %>%
+  mutate(
+    missingindex = paste(female, age, country)
+  ) -> finaldata2022
+
+finaldata2023 %>%
+  mutate(
+    missingindex = paste(female, age, country)
+  ) -> finaldata2023
+
+# This block computes the means for each dv/control, by indexno
+
+missingindex22 <- aggregate (finaldata2022[4:16], by = list(finaldata2022$missingindex), FUN = mean, na.rm = TRUE)
+missingindex23 <- aggregate (finaldata2023[4:16], by = list(finaldata2023$missingindex), FUN = mean, na.rm = TRUE)
+
+merge(finaldata2022, missingindex22, by.x = "missingindex", by.y = "Group.1") -> finaldata2022replaced
+merge(finaldata2023, missingindex23, by.x = "missingindex", by.y = "Group.1") -> finaldata2023replaced
+
+# This block replaces NA values with the means based on indexno
+# Only observations with < 4 missing values are included
+
+finaldata2022replaced %>%
+  mutate(
+    euidentity.x = ifelse(is.na(euidentity.x), euidentity.y, euidentity.x),
+    trusteu.x = ifelse(is.na(trusteu.x), trusteu.y, trusteu.x),
+    supporteu.x = ifelse(is.na(supporteu.x), supporteu.y, supporteu.x),
+    militarist.x = ifelse(is.na(militarist.x), militarist.y, militarist.x),
+    russiathreat.x = ifelse(is.na(russiathreat.x), russiathreat.y, russiathreat.x),
+    ps.x = ifelse(is.na(ps.x), ps.y, ps.x),
+    unemployed.x = ifelse(is.na(unemployed.x), unemployed.y, unemployed.x),
+    urban.x = ifelse(is.na(urban.x), urban.y, urban.x),
+    income.x = ifelse(is.na(income.x), income.y, income.x),
+    ideology.x = ifelse(is.na(ideology.x), ideology.y, ideology.x),
+    risktaker.x = ifelse(is.na(risktaker.x), risktaker.y, risktaker.x)
+  ) -> finaldata2022replaced
+
+finaldata2022replaced <- subset(finaldata2022replaced, finaldata2022replaced$ivcontrolno_under4 == TRUE)
+
+finaldata2023replaced %>%
+  mutate(
+    euidentity.x = ifelse(is.na(euidentity.x), euidentity.y, euidentity.x),
+    trusteu.x = ifelse(is.na(trusteu.x), trusteu.y, trusteu.x),
+    supporteu.x = ifelse(is.na(supporteu.x), supporteu.y, supporteu.x),
+    militarist.x = ifelse(is.na(militarist.x), militarist.y, militarist.x),
+    russiathreat.x = ifelse(is.na(russiathreat.x), russiathreat.y, russiathreat.x),
+    ps.x = ifelse(is.na(ps.x), ps.y, ps.x),
+    unemployed.x = ifelse(is.na(unemployed.x), unemployed.y, unemployed.x),
+    urban.x = ifelse(is.na(urban.x), urban.y, urban.x),
+    income.x = ifelse(is.na(income.x), income.y, income.x),
+    ideology.x = ifelse(is.na(ideology.x), ideology.y, ideology.x),
+    risktaker.x = ifelse(is.na(risktaker.x), risktaker.y, risktaker.x)
+  ) -> finaldata2023replaced
+
+finaldata2023replaced <- subset(finaldata2023replaced, finaldata2023replaced$ivcontrolno_under4 == TRUE)
+
+```
+
+```{r, missingreplacedmodel, echo = F}
+
+# This block runs the main model for 2023 and 2022 with missing values replaced
+
+M5 <- glmer(supportua ~ euidentity.x + trusteu.x + supporteu.x + russiathreat.x + 
+              militarist.x + ps.x + unemployed.x + urban.x + age.x + female.x + 
+              income.x + ideology.x + risktaker.x + (1 | country), 
+            data = finaldata2022replaced, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+M6 <- glmer(supportua ~ euidentity.x + trusteu.x + supporteu.x + russiathreat.x + 
+              militarist.x + ps.x + unemployed.x + urban.x + age.x + female.x + 
+              income.x + ideology.x + risktaker.x + (1 | country), 
+            data = finaldata2023replaced, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+modelsreplaced <- list(
+  "2022" = M5,
+  "2023" = M6)
+```
+
+```{r, missingmodeldisplay}
+
+# This block displays the results of the model with missing values replaced
+
+modelsummary(modelsreplaced, 
+             title = 
+               "Individual support for sending armed forces to help 
+             defend Ukraine, 2022 and 2023, missing values replaced",
+             stars = c('*' = .1, '**' = .05, '***' = 0.01),
+             gof_map = gof_map,
+             coef_map = c("euidentity.x" = "European identity",
+                          "trusteu.x" = "Trusts the EU", 
+                          "supporteu.x" = "Supports EU membership",
+                          "russiathreat.x" = "Sees Russia as a threat",
+                          "militarist.x" = "Wants more military spending",
+                          "ps.x" = "Post-secondary education", 
+                          "unemployed.x" = "Unemployed",
+                          "urban.x" = "Urban or suburban resident",
+                          "age.x" = "Age",
+                          "female.x" = "Female",
+                          "income.x" = "Income",
+                          "ideology.x" = "Ideology",
+                          "risktaker.x" = "Prefers taking risks",
+                          "(Intercept)" = "Intercept")) %>%
+  group_tt(i = list("Independent variables" = 1,
+                    "Control variables" = 11)) %>%
+  style_tt(i = c(1, 12), bold = TRUE) %>%
+  strip_tt(line=TRUE) %>%
+  style_tt(i = c(30), line="b", line_color = "black") %>%
+  style_tt(i = c(0), bold = TRUE) %>% 
+  theme_tt("spacing", rowsep = 0) %>%
+  theme_tt("multipage", width = .8) %>%
+  theme_tt("placement", latex_float ="h")
+
+```
+
+By plugging the gaps with artificial values for missing values, the number of observations included in the model for each year is greatly increased, to 18 064 and 14 077. This model confirms the results of the original model on all independent variables. For the gender variable, the already weak significance for the 2022 model disappears, calling this part of the original model further into question.
+
+Extension of the same approach to observations where DV values are missing allows the running of the fence-sitter model on almost the entire sample. Results are presented in the table below.
+
+```{r, fencesittermodelmissingreplaced, echo = F}
+finaldata2022replaced %>%
+  mutate(
+    supportuafence = case_when(
+      supportua == 0 ~ 1,
+      supportua == 1 ~ 1,
+      ),
+    supportuafence = replace_na(supportuafence, 0)
+    ) -> finaldata2022replaced
+
+finaldata2023replaced %>%
+  mutate(
+    supportuafence = case_when(
+      supportua == 0 ~ 1,
+      supportua == 1 ~ 1,
+      ),
+    supportuafence = replace_na(supportuafence, 0)
+    ) -> finaldata2023replaced
+
+M7 <- glmer(supportuafence ~ euidentity.x + trusteu.x + supporteu.x + russiathreat.x + 
+              militarist.x + ps.x + unemployed.x + urban.x + age.x + female.x + 
+              income.x + ideology.x + risktaker.x + (1 | country), 
+            data = finaldata2022replaced, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+M8 <- glmer(supportuafence ~ euidentity.x + trusteu.x + supporteu.x + russiathreat.x + 
+              militarist.x + ps.x + unemployed.x + urban.x + age.x + female.x + 
+              income.x + ideology.x + risktaker.x + (1 | country), 
+            data = finaldata2023replaced, family=binomial(link='logit'), 
+            na.action=na.exclude)
+
+fencemodels2 <- list(
+  "2022" = M7,
+  "2023" = M8)
+```
+
+```{r, missingfencemodeldisplay}
+
+# This block displays the results of the fence model with missing values replaced
+
+modelsummary(fencemodels2, 
+             title = 
+               "Likelihood of an individual taking a stance, 2022 and 2023, missing values replaced",
+             stars = c('*' = .1, '**' = .05, '***' = 0.01),
+             gof_map = gof_map,
+             coef_map = c("euidentity.x" = "European identity",
+                          "trusteu.x" = "Trusts the EU", 
+                          "supporteu.x" = "Supports EU membership",
+                          "russiathreat.x" = "Sees Russia as a threat",
+                          "militarist.x" = "Wants more military spending",
+                          "ps.x" = "Post-secondary education", 
+                          "unemployed.x" = "Unemployed",
+                          "urban.x" = "Urban or suburban resident",
+                          "age.x" = "Age",
+                          "female.x" = "Female",
+                          "income.x" = "Income",
+                          "ideology.x" = "Ideology",
+                          "risktaker.x" = "Prefers taking risks",
+                          "(Intercept)" = "Intercept")) %>%
+  group_tt(i = list("Independent variables" = 1,
+                    "Control variables" = 11)) %>%
+  style_tt(i = c(1, 12), bold = TRUE) %>%
+  strip_tt(line=TRUE) %>%
+  style_tt(i = c(30), line="b", line_color = "black") %>%
+  style_tt(i = c(0), bold = TRUE) %>% 
+  theme_tt("spacing", rowsep = 0) %>%
+  theme_tt("multipage", width = .8) %>%
+  theme_tt("placement", latex_float ="h")
+
+```
+
+This model confirms previous suspicions regarding the accuracy of the original fence-sitter model. A new independent variable, (lack of) support for EU membership, now constitutes the main explanatory factor. Again, this could be attributed to nationalist sentiments. In addition, support for increased military spending serves as a motivating factor. High-income, right-leaning urbanites also seem to be more likely to take a stance, and females are even more likely to remain on the fence in this model. A preference for risk-taking remains as the strongest explanatory factor.
+
+Since the findings on fence-sitting behavior vary significantly between different model specifications, any results should be interpreted with caution. But identity also seems to play a role here, albeit a murkier and perhaps weaker one. In this case, the lack of a European identity (or, the prevalence of a national identity over a European one), serves as a motivator for individuals to take a stance on the issue. A stance, according to the original model, where military intervention to help defend Ukraine is viewed unfavorably.
+
+As a final note, the methodology employed above regarding the replacement of missing values is far from perfect. However, given the low number of missing values per observation ($< 4$), one could argue that the impact on the models by replacing these missing values with the respective group means are quite low. And, as the results from the main model hold up quite well also after these adjustments, missing values seem to have a relatively limited impact on the main results.
+
+## Model diagnostics and alternative specification
+Tjur's $R^2$ of 0.18 (0.21), conditional $R^2$ of 0.24 (0.27) and marginal $R^2$ of 0.13 (0.14) for 2022 (2023) indicate a moderate goodness-of-fit for the main model. Binned residual plots for both years are displayed below.
+
+```{r, binnedresiddata, echo = F}
+
+# This block calculates the data for the binned residual plots
+
+model_data22 <- model.frame(M1)
+predicted_probs22 <- predict(M1, newdata = model_data22, type = "response")
+observed22 <- model.response(model_data22)
+residuals22 <- observed22 - predicted_probs22
+resid_data22 <- data.frame(predicted = predicted_probs22, residual = residuals22)
+
+model_data23 <- model.frame(M2)
+predicted_probs23 <- predict(M2, newdata = model_data23, type = "response")
+observed23 <- model.response(model_data23)
+residuals23 <- observed23 - predicted_probs23
+resid_data23 <- data.frame(predicted = predicted_probs23, residual = residuals23)
+```
+
+```{r, binnedresidplotcalc}
+
+# This block plots the binned residuals for 2022 and 2023
+
+n_bins <- 105
+resid_binned <- resid_data22 %>%
+  mutate(bin = ntile(predicted, n_bins)) %>%
+  group_by(bin) %>%
+  summarise(
+    bin_center = mean(predicted),
+    mean_resid = mean(residual),
+    se = sd(residual) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    upper_95 = 1.96 * se,
+    lower_95 = -1.96 * se,
+    out_of_bounds = mean_resid > upper_95 | mean_resid < lower_95
+  )
+
+ggplot(resid_binned, aes(x = bin_center, y = mean_resid)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "lightgray", alpha = 0.5) +
+  geom_point(aes(color = out_of_bounds), size = 1.5) +
+  scale_color_manual(values = c("FALSE" = "black", "TRUE" = "black"), guide = "none") +
+  scale_y_continuous(breaks=seq(-0.1, 0.1, 0.1)) +
+  labs(
+    x = "Predicted Probability",
+    y = "Average Residual"
+  ) +
+  ggtitle("2022") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 12, family = "serif", color="black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        legend.title = element_blank()
+        ) -> binnedresidplotgraph22
+
+n_bins <- 92
+resid_binned <- resid_data23 %>%
+  mutate(bin = ntile(predicted, n_bins)) %>%
+  group_by(bin) %>%
+  summarise(
+    bin_center = mean(predicted),
+    mean_resid = mean(residual),
+    se = sd(residual) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    upper_95 = 1.96 * se,
+    lower_95 = -1.96 * se,
+    out_of_bounds = mean_resid > upper_95 | mean_resid < lower_95
+  )
+
+ggplot(resid_binned, aes(x = bin_center, y = mean_resid)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  geom_ribbon(aes(ymin = lower_95, ymax = upper_95), fill = "lightgray", alpha = 0.5) +
+  geom_point(aes(color = out_of_bounds), size = 1.5) +
+  scale_color_manual(values = c("FALSE" = "black", "TRUE" = "black"), guide = "none") +
+  scale_y_continuous(breaks=seq(-0.1, 0.1, 0.1)) +
+  labs(
+    x = "Predicted Probability",
+    y = "Average Residual"
+  ) +
+  ggtitle("2023") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 12, family = "serif", color="black", hjust = 0.5),
+        axis.text.y = element_text(size = 12, family = "serif", color="black"),
+        axis.text.x = element_text(size = 12, family = "serif", color="black"),
+        axis.line = element_line (size = 1, color = "black"),
+        axis.ticks = element_line (size = 1, color = "black"),
+        panel.grid = element_blank(),
+        legend.title = element_blank()
+        ) -> binnedresidplotgraph23
+
+```
+```{r, binnedresidplot, fig.cap = "Binned residual plots, 2022 and 2023"}
+
+# This block displays the binned residual plots for 2022 and 2023
+
+binnedresidplotgraph22 + binnedresidplotgraph23
+
+```
+
+The share of bins within the 95% error bounds are 90% for 2022 and 88% for 2023. This is not ideal, but can still be deemed acceptable. As a final robustness check, an alternative model -- logit fixed effects -- is run for both years. The results, presented below, do not alter the significance for the independent variables observed in the main model.
+
+```{r, alternativemodels, echo = F}
+
+# This block runs logit fe models for 2022 and 2023
+
+M9 <- plm(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker, 
+            data = finaldata2022, index="country", model = "within",
+            na.action=na.exclude)
+
+M10 <- plm(supportua ~ euidentity + trusteu + supporteu + russiathreat + 
+              militarist + ps + unemployed + urban + age + female + 
+              income + ideology + risktaker, 
+            data = finaldata2023, index="country", model = "within",
+            na.action=na.exclude)
+
+modelsalt <- list(
+  "2022" = M9,
+  "2023" = M10)
+```
+
+```{r, alternativemodelsdisplay}
+
+# This block displays the alternative models
+
+gof_map2 <- data.frame(
+  raw = c("nobs", "r.squared", "adj.r.squared"),
+  clean = c("N", "R²", "Adjusted R²"),
+  fmt = c(0, 3, 3)
+)
+
+modelsummary(modelsalt, 
+             title = 
+               "Individual support for sending armed forces to help 
+             defend Ukraine, logit fixed effects, 2022 and 2023",
+             gof_map = gof_map2,
+             stars = c('*' = .1, '**' = .05, '***' = 0.01),
+             coef_map = c("euidentity" = "European identity",
+                          "trusteu" = "Trusts the EU", 
+                          "supporteu" = "Supports EU membership",
+                          "russiathreat" = "Sees Russia as a threat",
+                          "militarist" = "Wants more military spending",
+                          "ps" = "Post-secondary education", 
+                          "unemployed" = "Unemployed",
+                          "urban" = "Urban or suburban resident",
+                          "age" = "Age",
+                          "female" = "Female",
+                          "income" = "Income",
+                          "ideology" = "Ideology",
+                          "risktaker" = "Prefers taking risks",
+                          "(Intercept)" = "Intercept")) %>%
+  group_tt(i = list("Independent variables" = 1,
+                  "Control variables" = 11), line = FALSE) %>%
+  style_tt(i = c(1, 12), bold = TRUE) %>%
+  style_tt(i = c(0), bold = TRUE) %>%
+  strip_tt(line=TRUE) %>%
+  style_tt(i = 28, line = "b", line_color = "black") %>%
+  theme_tt("spacing", rowsep = 0) %>%
+  theme_tt("multipage", width = .8) %>%
+  theme_tt("placement", latex_float ="h")
+
+```
+
+# Conclusions
+Based on the results of this thesis, three conclusions of note can be drawn. First, that one of the main factors explaining individual European opinions on the issue of sending armed forces to help defend Ukraine seems to be the presence of a European identity. More specifically, this identity is only to a lesser degree based on European self-identification. Trust in and support for the European Union is a far bigger part. This finding adds to the literature on the role of identity in international relations, and how it shapes foreign policy behavior. However, the complex dynamics between identity, personal beliefs, values and concerns for physical security, as well as other factors, and how these in turn shape foreign policy considerations, are far from clear-cut and constitutes an interesting direction for future research.
+
+Second, that more data is needed in order to substantiate the preliminary finding that the link between European identity and support for Ukraine is stable over time. Using the data available this does seem to be the case, but one year is too short a time span to provide definitive evidence. Thus, future studies would do well to incorporate more recent data, as well as combining results from more surveys to provide more frequent data points. Given the recent developments in discussions regarding peace negotiations, with the possible deployment of European military forces to Ukraine being frequently mentioned, the issue has arguably received even more attention as of late. As the discussion intensifies, and the topic gains more relevance, shifts in the underlying opinion patterns may emerge, which are highly interesting for future studies on the factors that shape support for military intervention.
+
+Finally, that this conflict, for many Europeans, seems to strike at the core of what it means to be European. The strong link identified between European identity (particularly the aspects related to the European Union) and support for Ukraine, serves as an indicator that many see this conflict as closely linked to a shared European construct. And this goes both ways. In the same way that many Europeans perceive Russia's invasion not only as an attack on Ukraine, but also as an attack on Europe, a large number of Europeans have a diametrically opposed view. This group, who do not identify with a modern European identity (instead, one could assume, viewing the world through lenses shaped by national identities) are opposed to sending armed forces to Ukraine. Further exploration of the motivations and values that underpin this reasoning is essential to understanding the dynamics of public opinion in this case.
+
+The Russo-Ukrainian War constitutes one of the most consequential events in modern European history. As the conflict is still ongoing, its outcomes -- as well as its effects on Europe and the World -- are still impossible to determine. Given the scale and the stakes involved, this war is perhaps the most relevant case for the study of European security in decades. Thus, there is still much to learn from the conflict, including on the subject of public opinion on military interventions. However, scholars and policy-makers would do well to remember the immense human suffering inflicted on the Ukrainian people, and soldiers on both sides. Hundreds of thousands of people have died, and many more have been wounded. Once prosperous Ukrainian cities have been mercilessly bombed to the ground, and millions of Ukrainians have been driven from their homes. Behind the numbers and abstract models, this war is equal parts tragic, horrific and ugly. And, as in any lengthy discussion on this subject, one must clearly state the obvious: that the Russian invasion of Ukraine is, at its core, a grotesque act of aggression and a crime against peace, humanity and most of all the Ukrainian people.
+
+\newpage
+
+# Appendix {-}
+
+```{=latex}
+\setcounter{subsection}{0}
+\renewcommand{\thesubsection}{A.\arabic{subsection}}
+```
+## Data manipulation{#datamanipulation}
+
+To set up the data for analysis replication, follow the steps indicated below:
+
+1. Download the two datasets from the SiE project page. The 2023 dataset can be found [here](https://search.gesis.org/research_data/SDN-10.7802-2646?doi=10.7802/2646), and the 2022 dataset can be found [here](https://search.gesis.org/research_data/SDN-10.7802-2506?doi=10.7802/2506). The datasets are labeled "2023_SiE_dataset_dataset_labels.csv" and "Dataset.csv", and can be found by pressing the "Datasets" button under the "Downloads" section.
+
+2. Convert the files to .xlsx and label them "2023_SiE.xlsx" and "2022_SiE.xlsx".
+
+3. Place the two files in the working directory.
+
+4. Run the code provided in the [supplementary materials](https://github.com/pettermartinsson94/master-thesis-code/).
+
+\newpage
+
+## Variable list{#variablelist}
+
+```{r, variabletable, echo = F}
+
+# This block displays a table of the variables used
+
+listofvariables <- data.frame(variablenames = c("supportua",
+                                                "euidentity",
+                                                "trusteu",
+                                                "supporteu",
+                                                "militarist",
+                                                "russiathreat",
+                                                "ps",
+                                                "unemployed",
+                                                "urban",
+                                                "age",
+                                                "female",
+                                                "incomegroup",
+                                                "ideology",
+                                                "risktaker"),
+                              variabletype = c("Binary",
+                                               "Integer (0-3)",
+                                               "Binary",
+                                               "Binary",
+                                               "Binary",
+                                               "Binary",
+                                               "Binary",
+                                               "Binary",
+                                               "Binary",
+                                               "Integer (0-4)",
+                                               "Binary",
+                                               "Integer (0-5)",
+                                               "Integer (0-6)",
+                                               "Binary"),
+                              codebook2023 = c("Q47a_8",
+                                               "Q4",
+                                               "New_Q43",
+                                               "Q9 / Q9UK",
+                                               "Q69",
+                                               "Q68_a",
+                                               "education",
+                                               "profile_work_stat",
+                                               "Glob_areatype",
+                                               "age_grp_all",
+                                               "gender_all",
+                                               "Q61",
+                                               "Q62",
+                                               "Q60"),
+                              codebook2022 = c("q47a_8",
+                                               "q4",
+                                               "new_q43",
+                                               "q9 / q9uk",
+                                               "q69",
+                                               "q68_a",
+                                               "education_uk_all_103",
+                                               "profile_work_stat",
+                                               "glob_areatype",
+                                               "age_grp_all",
+                                               "gender_all",
+                                               "q61",
+                                               "q62",
+                                               "q60"))
+colnames(listofvariables) <- c(
+  "Name", "Type", "Codebook 2023", "Codebook 2022")
+
+listofvariables %>%
+  kbl(., align = c("cccc"),
+      caption = "List of variables included in the model",
+      linesep = "",
+      longtable = TRUE, booktabs = TRUE) %>%
+  row_spec(0, bold=TRUE) %>%
+  kable_styling(latex_options = c("hold_position"))
+
+```
+\newpage
+
+## Random slope models{#randomslope}
+
+```{r, randomslope2022display}
+
+# This block displays the random slope models for 2022
+
+modelsummary(remodels22,
+             title = 
+               "Random slope models (RE variable in title) 2022",
+             stars = c('*' = .1, '**' = .05, '***' = 0.01),
+             gof_map = c("nobs", "r.squared", "r2.conditional"),
+             coef_map = c("euidentity" = "European identity",
+                          "trusteu" = "Trusts the EU", 
+                          "supporteu" = "Supports EU membership",
+                          "russiathreat" = "Sees Russia as a threat",
+                          "militarist" = "Wants more military spending",
+                          "ps" = "Post-secondary education", 
+                          "unemployed" = "Unemployed",
+                          "urban" = "Urban or suburban resident",
+                          "age" = "Age",
+                          "female" = "Female",
+                          "income" = "Income",
+                          "ideology" = "Ideology",
+                          "risktaker" = "Prefers taking risks",
+                          "(Intercept)" = "Intercept")) %>%
+  group_tt(i = list("Independent variables" = 1,
+                    "Control variables" = 11)) %>%
+  style_tt(i = c(1, 12), bold = TRUE) %>%
+  strip_tt(line=TRUE) %>%
+  style_tt(i = 30, line = "b", line_color = "black") %>%
+  style_tt(i = c(0), bold = TRUE) %>% 
+  style_tt(fontsize = 0.8) %>%
+  theme_tt("spacing", rowsep = 0) %>%
+  theme_tt("multipage", width = .8) %>%
+  theme_tt("placement", latex_float ="h")
+```
+
+```{r, randomslope2023display}
+
+# This block displays the random slope models for 2023
+
+modelsummary(remodels23,
+             title = 
+               "Random slope models (RE variable in title) 2023",
+             stars = c('*' = .1, '**' = .05, '***' = 0.01),
+             gof_map = c("nobs", "r.squared", "r2.conditional"),
+             coef_map = c("euidentity" = "European identity",
+                          "trusteu" = "Trusts the EU", 
+                          "supporteu" = "Supports EU membership",
+                          "russiathreat" = "Sees Russia as a threat",
+                          "militarist" = "Wants more military spending",
+                          "ps" = "Post-secondary education", 
+                          "unemployed" = "Unemployed",
+                          "urban" = "Urban or suburban resident",
+                          "age" = "Age",
+                          "female" = "Female",
+                          "income" = "Income",
+                          "ideology" = "Ideology",
+                          "risktaker" = "Prefers taking risks",
+                          "(Intercept)" = "Intercept")) %>%
+  group_tt(i = list("Independent variables" = 1,
+                    "Control variables" = 11)) %>%
+  style_tt(i = c(1, 12), bold = TRUE) %>%
+  style_tt(i = c(30), line="b", line_color = "black") %>%
+  style_tt(i = c(0), bold = TRUE) %>%  
+  style_tt(fontsize = 0.8) %>%
+  theme_tt("spacing", rowsep = 0) %>%
+  theme_tt("multipage", width = .8) %>%
+  theme_tt("placement", latex_float ="h")
+```
+
+\newpage
