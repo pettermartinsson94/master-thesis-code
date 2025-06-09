@@ -10,3 +10,5 @@ To set up the data for analysis replication, follow the steps indicated below:
 3. Place the two files in the working directory.
 
 4. Run the code provided in the markdown file labeled "Petter Martinsson".
+
+AI disclaimer: Parts of the code have been troubleshooted with the aid of GPT-4.
