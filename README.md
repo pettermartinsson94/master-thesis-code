@@ -11,4 +11,4 @@ To set up the data for analysis replication, follow the steps indicated below:
 
 4. Run the code provided in the markdown file labeled "Petter Martinsson".
 
-AI disclaimer: Parts of the code have been troubleshooted with the aid of GPT-4.
+AI disclaimer: GPT-4 was used to troubleshoot parts of the code.
